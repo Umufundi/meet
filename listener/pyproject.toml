@@ -1,0 +1,27 @@
+[project]
+# The perception sidecar. It owns the microphone, the ASR, and the speaker
+# embedding model, and it exposes exactly one thing to the rest of the system:
+# a line of JSON per settled utterance, carrying text plus an L2-normalized
+# voice vector. It holds no meeting state, no database, and no opinion about
+# who anyone is. Keeping torch and CTranslate2 behind a process boundary is
+# what lets the core start in milliseconds and stay swappable.
+name = "meet-listen"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.1",
+    "sounddevice>=0.5",
+    "soundfile>=0.13",
+    "faster-whisper>=1.1",
+    "speechbrain>=1.0",
+    "torch>=2.5",
+    "torchaudio>=2.5",
+    "silero-vad>=5.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["meet_listen"]

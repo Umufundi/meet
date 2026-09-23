@@ -1,0 +1,36 @@
+[project]
+name = "meet"
+# The terminal meeting identity tool. The core answers "who is speaking?" and
+# asks a human when it cannot. It deliberately carries NO machine-learning
+# dependency: perception (audio -> text + voice vector) lives in the `listener`
+# sidecar, reached only across a process boundary over NDJSON. That boundary is
+# the lesson from silverstein/minutes, whose live diarizer had to be exiled to
+# its own cargo workspace because ort/ndarray versions could not coexist with
+# the host. Keeping judgment free of torch means the loop below stays testable,
+# fast to start, and replaceable engine by engine.
+version = "0.1.0"
+description = "Who is speaking, resolved live, taught by a human."
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.15",
+    "rich>=13.9",
+    "textual>=1.0",
+    "numpy>=2.1",
+    "httpx[http2]>=0.28,<1",
+]
+
+[project.scripts]
+meet = "meet.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["meet"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

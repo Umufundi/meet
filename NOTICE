@@ -1,0 +1,40 @@
+meet — terminal meeting identity tool
+Copyright (c) 2026 FY Network
+
+This product's design draws on the following MIT-licensed projects. No source
+was copied verbatim; the debts are architectural and are recorded here because
+the ideas are the valuable part.
+
+  silverstein/minutes (MIT), Mat Silverstein
+    - perception engines exiled behind a process boundary with an NDJSON
+      contract, so an incompatible dependency graph cannot reach the host
+    - append-only voice samples with revoke-only mutation, and voice profiles
+      scoped by embedding model id so vectors from different models are never
+      compared
+    - solo-enrollment quality gates (SNR, clipping, window consistency,
+      minimum speech, minimum RMS) and their threshold values
+    - late speaker attribution applied by append rather than in-place rewrite
+
+  juanmc2005/diart (MIT), Juan Manuel Coria
+    - streaming diarization design and its published embedding-model survey,
+      which selected the ungated ECAPA path used here
+
+  KmingLyu/real-time-speaker-diarization-asr (MIT)
+    - incremental nearest-centroid speaker clustering with a new-cluster
+      distance threshold
+
+  Gr122lyBr/voicetag (MIT)
+    - enrol-then-identify interface shape and per-segment confidence reporting
+
+  moutons/whotalksitron (Apache-2.0)
+    - per-context voiceprint enrollment scoping
+
+Model weights carry their own terms, separate from the licenses above:
+
+  speechbrain/spkrec-ecapa-voxceleb   Apache-2.0, not gated
+  Systran/faster-whisper-small.en     MIT, not gated
+  snakers4/silero-vad                 MIT, not gated
+
+No gated Hugging Face model is required to run this tool. Adding pyannote
+segmentation for overlap-aware diarization would introduce gated weights and
+must be re-audited before any commercial distribution.

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+listener/.venv/
+meetings/
+*.wav
+.env
