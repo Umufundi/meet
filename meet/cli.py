@@ -15,6 +15,7 @@ from .memory import db, people
 from .session import output
 from .session.meeting import Meeting
 from .ui import plain
+from .ui.app import MeetApp
 
 app = typer.Typer(add_completion=False, help="Who is speaking, resolved live, taught by a human.")
 
@@ -116,6 +117,7 @@ def start(
     model: str = typer.Option("small.en", "--model", help="faster-whisper model size"),
     no_jev: bool = typer.Option(False, "--no-jev", help="never consult Jev; ask the human instead"),
     no_extract: bool = typer.Option(False, "--no-extract", help="skip decision/action extraction"),
+    plain_ui: bool = typer.Option(False, "--plain", help="line output instead of the full screen"),
 ) -> None:
     """Start listening to the room."""
     _run(
@@ -127,6 +129,7 @@ def start(
         use_jev=not no_jev,
         extract=not no_extract,
         realtime=False,
+        plain_ui=plain_ui,
     )
 
 
@@ -139,6 +142,7 @@ def replay(
     realtime: bool = typer.Option(False, "--realtime", help="pace playback to wall clock"),
     no_jev: bool = typer.Option(False, "--no-jev"),
     no_extract: bool = typer.Option(False, "--no-extract"),
+    plain_ui: bool = typer.Option(True, "--plain/--screen", help="line output, or the full screen"),
 ) -> None:
     """Run a 16 kHz mono recording through the same live path.
 
@@ -154,6 +158,7 @@ def replay(
         use_jev=not no_jev,
         extract=not no_extract,
         realtime=realtime,
+        plain_ui=plain_ui,
     )
 
 
@@ -167,6 +172,7 @@ def _run(
     use_jev: bool,
     extract: bool,
     realtime: bool,
+    plain_ui: bool = False,
 ) -> None:
     roster = [name.strip() for name in attendees.split(",") if name.strip()]
     conn = db.connect()
@@ -188,13 +194,19 @@ def _run(
         listener.replay(source, realtime=realtime)
     listener.start()
 
+    # The full screen needs a real terminal. Piped or redirected output falls
+    # back to line mode rather than rendering control codes into a file.
+    interactive = sys.stdout.isatty() and sys.stdin.isatty()
     try:
-        plain.run(
-            meeting,
-            listener,
-            output_dir=directory,
-            idle_timeout=2.0 if source is not None else None,
-        )
+        if plain_ui or not interactive:
+            plain.run(
+                meeting,
+                listener,
+                output_dir=directory,
+                idle_timeout=2.0 if source is not None else None,
+            )
+        else:
+            MeetApp(meeting, listener, directory).run()
     except KeyboardInterrupt:
         typer.echo("\nstopping", err=True)
         listener.stop()
