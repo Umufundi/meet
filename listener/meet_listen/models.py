@@ -25,6 +25,18 @@ EMBED_SOURCE = "speechbrain/spkrec-ecapa-voxceleb"
 EMBED_MODEL_ID = "ecapa-voxceleb@sb1"
 EMBED_DIM = 192
 
+# Hugging Face revisions to load. None means "whatever the hub serves", which is
+# only acceptable because `meet setup` records the snapshot it actually fetched
+# in the runtime manifest and every later run is offline. Set a commit hash here
+# to make a release load exactly one snapshot on every machine.
+WHISPER_REVISION: str | None = os.environ.get("MEET_WHISPER_REVISION") or None
+EMBED_REVISION: str | None = os.environ.get("MEET_EMBED_REVISION") or None
+
+
+def offline() -> bool:
+    """Models were primed by `meet setup`; never touch the network again."""
+    return os.environ.get("MEET_MODELS_OFFLINE") == "1"
+
 
 def _log(message: str) -> None:
     # stdout is the NDJSON channel and must stay clean.
@@ -51,7 +63,13 @@ class Transcriber:
 
         _log(f"loading whisper: {model_size} ({compute_type})")
         self.model_size = model_size
-        self.model = WhisperModel(model_size, device="cpu", compute_type=compute_type)
+        self.model = WhisperModel(
+            model_size,
+            device="cpu",
+            compute_type=compute_type,
+            local_files_only=offline(),
+            revision=WHISPER_REVISION,
+        )
 
     def __call__(self, pcm: np.ndarray, *, prompt: str | None = None) -> Transcription:
         segments, _info = self.model.transcribe(
@@ -83,10 +101,24 @@ class Embedder:
         self.torch = torch
         cache = os.environ.get("MEET_MODEL_CACHE") or os.path.expanduser("~/.meet/models/ecapa")
         _log(f"loading speaker embedding: {EMBED_SOURCE}")
+        # Copy rather than symlink out of the hub cache: creating symlinks on
+        # Windows needs Developer Mode or admin, and fails with "a required
+        # privilege is not held by the client" on an ordinary laptop.
+        extra: dict = {}
+        try:
+            from speechbrain.utils.fetching import FetchConfig, LocalStrategy
+
+            extra = {
+                "local_strategy": LocalStrategy.COPY,
+                "fetch_config": FetchConfig(revision=EMBED_REVISION, allow_network=not offline()),
+            }
+        except ImportError:  # speechbrain < 1.0
+            pass
         self.model = EncoderClassifier.from_hparams(
             source=EMBED_SOURCE,
             savedir=cache,
             run_opts={"device": "cpu"},
+            **extra,
         )
         self.model.eval()
 

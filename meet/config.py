@@ -104,8 +104,8 @@ class Policy:
 
 POLICY = Policy()
 
-# Jev. The key is read from the environment, falling back to the login keychain
-# so it never has to sit in a dotfile on this machine.
+# Jev. The key is read from the environment, falling back to the OS credential
+# store (Credential Manager, Keychain, Secret Service) so it never sits in a dotfile.
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 JEV_MODEL = os.environ.get("TYPESAFE_MODEL", "jev-latest")
 JEV_KEYCHAIN_SERVICE = "TypeSafe API Key"

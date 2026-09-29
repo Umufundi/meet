@@ -58,6 +58,20 @@ class MatchResult:
         return self.candidates[0].similarity - self.candidates[1].similarity
 
 
+def _vector(row: sqlite3.Row) -> np.ndarray | None:
+    """Decode a stored embedding, or None if the row is damaged.
+
+    One corrupt blob must cost one sample, not the meeting: matching runs on
+    every utterance, so an exception here would take identity down for the
+    rest of the session.
+    """
+    try:
+        v = unpack(row["embedding"], row["dim"])
+    except (ValueError, TypeError):
+        return None
+    return v if np.all(np.isfinite(v)) and float(np.linalg.norm(v)) > 1e-12 else None
+
+
 def _live_samples(conn: sqlite3.Connection, model_id: str) -> dict[str, list[tuple[np.ndarray, str]]]:
     rows = conn.execute(
         "SELECT person_slug, embedding, dim, trust FROM voice_sample "
@@ -66,7 +80,9 @@ def _live_samples(conn: sqlite3.Connection, model_id: str) -> dict[str, list[tup
     ).fetchall()
     out: dict[str, list[tuple[np.ndarray, str]]] = {}
     for r in rows:
-        out.setdefault(r["person_slug"], []).append((unpack(r["embedding"], r["dim"]), r["trust"]))
+        v = _vector(r)
+        if v is not None:
+            out.setdefault(r["person_slug"], []).append((v, r["trust"]))
     return out
 
 
@@ -82,10 +98,11 @@ def rebuild_profile(conn: sqlite3.Connection, slug: str, model_id: str) -> int:
         "ORDER BY created_at DESC LIMIT ?",
         (slug, model_id, POLICY.max_samples_per_person),
     ).fetchall()
-    if not rows:
+    vectors = [v for v in (_vector(r) for r in rows) if v is not None]
+    if not vectors or len({v.size for v in vectors}) != 1:
         conn.execute("DELETE FROM voice_profile WHERE person_slug=? AND model_id=?", (slug, model_id))
         return 0
-    stack = np.stack([unpack(r["embedding"], r["dim"]) for r in rows])
+    stack = np.stack(vectors)
     centroid = stack.mean(axis=0)
     conn.execute(
         "INSERT INTO voice_profile(person_slug, model_id, embedding, dim, sample_count, updated_at) "
@@ -94,7 +111,7 @@ def rebuild_profile(conn: sqlite3.Connection, slug: str, model_id: str) -> int:
         "sample_count=excluded.sample_count, updated_at=excluded.updated_at",
         (slug, model_id, pack(centroid), int(stack.shape[1]), len(rows), now()),
     )
-    return len(rows)
+    return len(vectors)
 
 
 def match(
@@ -119,10 +136,11 @@ def match(
 
     names = {r["slug"]: r["display_name"] for r in conn.execute("SELECT slug, display_name FROM person")}
     centroids = {
-        r["person_slug"]: unpack(r["embedding"], r["dim"])
+        r["person_slug"]: v
         for r in conn.execute(
             "SELECT person_slug, embedding, dim FROM voice_profile WHERE model_id=?", (model_id,)
         )
+        if (v := _vector(r)) is not None
     }
     samples = _live_samples(conn, model_id)
 
@@ -130,11 +148,14 @@ def match(
     for slug, vectors in samples.items():
         if restrict_to is not None and slug not in restrict_to:
             continue
+        vectors = [(v, trust) for v, trust in vectors if v.size == probe.size]
+        if not vectors:
+            continue
         sims = np.array([float(np.dot(probe, v / (np.linalg.norm(v) or 1.0))) for v, _ in vectors])
         top = np.sort(sims)[::-1][: policy.top_k_samples_scored]
         centroid = centroids.get(slug)
         centroid_sim = 0.0
-        if centroid is not None:
+        if centroid is not None and centroid.size == probe.size:
             cn = float(np.linalg.norm(centroid))
             if cn > 1e-12:
                 centroid_sim = float(np.dot(probe, centroid / cn))
@@ -174,8 +195,9 @@ def consistency_with_profile(
         return None
     probe = np.asarray(probe, dtype=np.float32).ravel()
     probe = probe / (float(np.linalg.norm(probe)) or 1.0)
-    sims = [float(np.dot(probe, unpack(r["embedding"], r["dim"]))) for r in rows]
-    return min(sims)
+    vectors = [v for v in (_vector(r) for r in rows) if v is not None and v.size == probe.size]
+    sims = [float(np.dot(probe, v)) for v in vectors]
+    return min(sims) if sims else None
 
 
 @dataclass(frozen=True, slots=True)

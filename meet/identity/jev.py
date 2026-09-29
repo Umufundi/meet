@@ -18,16 +18,17 @@ part of the prompt.
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import os
-import subprocess
 from dataclasses import dataclass
 
 import httpx
 
 from ..config import JEV_KEYCHAIN_SERVICE, JEV_MODEL, JEV_TIMEOUT_S, JEV_URL
 from ..memory.people import Candidate
+from . import credentials
 
 UNKNOWN = "UNKNOWN"
 
@@ -65,20 +66,18 @@ class JevUnavailable(RuntimeError):
 
 
 def api_key() -> str | None:
-    """Environment first, then the login keychain, so no key lands in a dotfile."""
+    """Environment first, then the OS credential store, so no key lands in a dotfile."""
     key = os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY")
     if key:
         return key
-    try:
-        out = subprocess.run(
-            ["security", "find-generic-password", "-s", JEV_KEYCHAIN_SERVICE, "-w"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return out.stdout.strip() or None
+    return _stored_key()
+
+
+@functools.cache
+def _stored_key() -> str | None:
+    # Cached: this is asked on every tie mid-meeting, and each lookup can mean
+    # spawning a process. A key added mid-meeting is picked up next meeting.
+    return credentials.lookup(JEV_KEYCHAIN_SERVICE)
 
 
 def _validate(answer: dict, option_ids: set[str]) -> None:
