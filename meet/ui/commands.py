@@ -12,17 +12,55 @@ from dataclasses import dataclass
 
 from ..session.meeting import Meeting
 
-HELP = """\
-  <n> <name>        answer question n: name the speaker (an unknown name enrols them)
-  :people           who is in the room, and how well each voice is known
-  :name <c> <name>  name speaker cluster c directly
-  :merge <a> <b>    clusters a and b are the same person
-  :wrong <name>     the last line was actually this person
-  :undo             reverse the last naming
-  :decision [text]  mark the last line (or this text) as a decision
-  :action [text]    mark it as an action item
-  :help             this list
-  :end              finish the meeting and write the record"""
+
+@dataclass(frozen=True, slots=True)
+class Command:
+    name: str
+    usage: str
+    summary: str
+
+    @property
+    def form(self) -> str:
+        return f"/{self.name} {self.usage}".rstrip()
+
+
+# The one list every frontend reads: the `/` menu, completion, and help all
+# come from here, so they cannot drift apart. `:name` works too, for habit.
+COMMANDS = (
+    Command("people", "", "who is speaking, and how sure Meet is about each"),
+    Command("name", "<speaker#> <name>", "name a speaker directly"),
+    Command("wrong", "<name>", "the last line was actually this person"),
+    Command("merge", "<a> <b>", "speakers a and b are the same person"),
+    Command("undo", "", "reverse the last naming"),
+    Command("decision", "[text]", "mark the last line (or this text) as a decision"),
+    Command("action", "[text]", "mark the last line (or this text) as an action item"),
+    Command("help", "", "list everything you can type"),
+    Command("end", "", "finish the meeting and write the record"),
+)
+PREFIXES = ("/", ":")
+
+
+def suggest(text: str) -> list[Command]:
+    """Commands matching what has been typed so far, for the live menu.
+
+    `/` alone lists everything; `/me` narrows to /merge; once a space is typed
+    only the exact command stays, so its usage remains visible while typing
+    the arguments. Anything not starting with a prefix gets no menu.
+    """
+    if not text.startswith(PREFIXES):
+        return []
+    word, space, _ = text[1:].partition(" ")
+    word = word.lower()
+    if space:
+        return [c for c in COMMANDS if c.name == word]
+    return [c for c in COMMANDS if c.name.startswith(word)]
+
+
+HELP = "\n".join(
+    ["  1-4               pick that option for the question on screen",
+     "  <q#> <name>       answer question q# with a name (a new name enrols them)"]
+    + [f"  {c.form:<18}{c.summary}" for c in COMMANDS]
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,9 +76,10 @@ def apply(meeting: Meeting, raw: str) -> Result:
     if not text:
         return Result("")
 
-    if not text.startswith(":"):
-        # `3 Marcus` — answer question 3. The bare form is the common case and
-        # deserves the shortest possible keystroke count during a live meeting.
+    if not text.startswith(PREFIXES):
+        # `3 Marcus` answers question 3; a bare `2` picks option 2 of the
+        # question on screen. These are the common case during a live meeting
+        # and deserve the fewest keystrokes.
         head, _, rest = text.partition(" ")
         if head.isdigit() and rest.strip():
             try:
@@ -49,14 +88,14 @@ def apply(meeting: Meeting, raw: str) -> Result:
                 return Result(f"no open question {head}")
             return Result(f"speaker identified as {name}", changed=True)
         if head.isdigit():
-            return Result("give a name: e.g. `3 Marcus`")
-        return Result("commands start with ':' — try :help")
+            return _pick(meeting, int(head))
+        return Result("commands start with / (try /help), or type a number to answer")
 
     parts = text[1:].split()
     command = parts[0].lower() if parts else ""
     args = parts[1:]
 
-    if command in {"help", "?"}:
+    if command in {"help", "?", ""}:
         return Result(HELP)
 
     if command == "people":
@@ -107,4 +146,20 @@ def apply(meeting: Meeting, raw: str) -> Result:
     if command == "end":
         return Result("finishing", finished=True)
 
-    return Result(f"unknown command :{command} — try :help")
+    near = suggest("/" + command[:2])
+    hint = f" (did you mean {near[0].form}?)" if near else ""
+    return Result(f"unknown command /{command}{hint} — try /help")
+
+
+def _pick(meeting: Meeting, choice: int) -> Result:
+    """A bare number: option `choice` of the question on screen (the oldest)."""
+    if not meeting.questions:
+        return Result("no question is waiting; to name a speaker use /name <speaker#> <name>")
+    question = min(meeting.questions.values(), key=lambda q: q.id)
+    if not 1 <= choice <= len(question.options):
+        if not question.options:
+            return Result(f"no suggestions for this voice; type {question.id} <name>")
+        return Result(f"pick 1-{len(question.options)}, or type {question.id} <name>")
+    slug, _name, _similarity = question.options[choice - 1]
+    name = meeting.answer(question.id, slug)
+    return Result(f"speaker identified as {name}", changed=True)

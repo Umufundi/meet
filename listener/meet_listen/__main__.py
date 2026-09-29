@@ -187,9 +187,14 @@ def main(argv: list[str] | None = None) -> int:
         emit({"t": "error", "message": f"capture failed: {exc}", "fatal": True})
         stop.put(True)
 
+    # Drain the whole backlog, however long it is: the last things said are
+    # usually the ones that matter, and on a slow machine a long meeting can
+    # end minutes behind. The recording is already closed and safe on disk.
+    pending = work.qsize()
+    if pending:
+        emit({"t": "finishing", "pending": pending})
     work.put(None)
-    # Drain the backlog: the last things said are usually the ones that matter.
-    worker_thread.join(timeout=120)
+    worker_thread.join()
     emit(
         {
             "t": "stopped",

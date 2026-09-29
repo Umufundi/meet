@@ -200,6 +200,19 @@ class Microphone:
                 continue
 
 
+def default_input(sd) -> int | None:
+    """The input device PortAudio opens when none is named, or None.
+
+    `sd.default.device` is sounddevice's own override setting, and reads -1
+    ("no override, use the system default") on a normal machine; it is not the
+    system default. Ask PortAudio for the default input device instead.
+    """
+    try:
+        return int(sd.query_devices(kind="input")["index"])
+    except Exception:  # no input device at all, or PortAudio unavailable
+        return None
+
+
 def describe_devices() -> str:
     import sounddevice as sd
 
@@ -211,8 +224,7 @@ def describe_devices() -> str:
             f"{index:>5}  {info['max_input_channels']:>2}  "
             f"{int(info['default_samplerate']):>6}  {info['name']}"
         )
-    default = sd.default.device[0] if isinstance(sd.default.device, (list, tuple)) else None
-    lines.append(f"\ndefault input: {default}")
+    lines.append(f"\ndefault input: {default_input(sd)}")
     return "\n".join(lines)
 
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import typer
 
 from . import doctor as doctor_mod
-from . import install, runtime, sidecar
+from . import install, power, runtime, sidecar
 from .config import POLICY, meetings_dir
 from .identity import jev
 from .memory import db
@@ -225,17 +225,23 @@ def _run(
     # back to line mode rather than rendering control codes into a file.
     interactive = sys.stdout.isatty() and sys.stdin.isatty()
     try:
-        if plain_ui or not interactive:
-            plain.run(
-                meeting,
-                listener,
-                output_dir=directory,
-                idle_timeout=2.0 if source is not None else None,
-            )
-        else:
-            MeetApp(meeting, listener, directory).run()
+        # There is no time limit on a meeting; sleep is the one thing that
+        # would silently impose one.
+        with power.keep_awake() as awake:
+            if not awake and source is None:
+                typer.secho("could not stop this computer from sleeping; keep it awake yourself",
+                            fg=typer.colors.YELLOW, err=True)
+            if plain_ui or not interactive:
+                plain.run(
+                    meeting,
+                    listener,
+                    output_dir=directory,
+                    idle_timeout=2.0 if source is not None else None,
+                )
+            else:
+                MeetApp(meeting, listener, directory).run()
     except KeyboardInterrupt:
-        typer.echo("\nstopping", err=True)
+        typer.echo("\nstopping: finishing the transcript (Ctrl+C again to stop at once)", err=True)
         listener.stop()
     finally:
         if not listener.alive and listener.stderr_tail and not meeting.lines:

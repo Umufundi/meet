@@ -164,8 +164,14 @@ class Listener:
             except queue.Empty:
                 return
 
-    def stop(self, timeout: float = 20.0) -> None:
-        """Ask the listener to finish cleanly so the WAV header is written."""
+    def stop(self, timeout: float | None = None) -> None:
+        """Ask the listener to finish, and wait for it.
+
+        No timeout by default: after a long meeting on a slow machine the
+        listener may still be transcribing the last minutes, and cutting it off
+        loses exactly those lines. The recording itself is already closed and
+        safe by then. Ctrl+C while waiting stops it at once.
+        """
         if self._process is None:
             return
         if self._process.stdin and not self._process.stdin.closed:
@@ -177,7 +183,7 @@ class Listener:
                 pass
         try:
             self._process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
             self._process.terminate()
             try:
                 self._process.wait(timeout=5)
