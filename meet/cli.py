@@ -8,10 +8,11 @@ from pathlib import Path
 
 import typer
 
-from . import sidecar
+from . import doctor as doctor_mod
+from . import install, runtime, sidecar
 from .config import POLICY, meetings_dir
 from .identity import jev
-from .memory import db, people
+from .memory import db
 from .session import output
 from .session.meeting import Meeting
 from .ui import plain
@@ -60,21 +61,37 @@ def devices() -> None:
 
 
 @app.command()
-def doctor() -> None:
-    """Check that the listener, the database, and Jev are reachable."""
-    ok, detail = sidecar.check_listener()
-    typer.secho(f"listener   {'ok' if ok else detail}", fg=typer.colors.GREEN if ok else typer.colors.RED)
-    conn = db.connect()
-    known = db.list_people(conn)
-    typer.echo(f"memory     {len(known)} people, {db.db_path() if hasattr(db, 'db_path') else ''}")
-    typer.secho(
-        f"jev        {'key found' if jev.api_key() else 'no API key (questions go to you instead)'}",
-        fg=typer.colors.GREEN if jev.api_key() else typer.colors.YELLOW,
-    )
-    try:
-        typer.echo("inputs\n" + sidecar.list_devices())
-    except sidecar.ListenerMissing:
-        pass
+def setup(
+    model: str = typer.Option("small.en", "--model", help="faster-whisper model to download"),
+    force: bool = typer.Option(False, "--force", help="rebuild the listener runtime from scratch"),
+    skip_models: bool = typer.Option(False, "--skip-models", help="do not download models now"),
+    no_mic_test: bool = typer.Option(False, "--no-mic-test", help="skip the 3-second microphone test"),
+    torch_index: str = typer.Option(
+        "auto", "--torch-index", help="auto | cpu | pypi  (auto = CPU wheels on Linux, PyPI elsewhere)"
+    ),
+) -> None:
+    """Install the listener runtime and models, then check everything. Run once."""
+    ok = install.Setup(
+        asr_model=model,
+        force=force,
+        skip_models=skip_models,
+        mic_test=not no_mic_test and sys.stdin.isatty(),
+        torch_index=torch_index,
+        echo=typer.echo,
+    ).run()
+    raise typer.Exit(0 if ok else 1)
+
+
+@app.command()
+def doctor(
+    audio: bool = typer.Option(False, "--audio", help="also record 3 seconds from the microphone"),
+    models: bool = typer.Option(False, "--models", help="also load every model, offline"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="show details for passing checks too"),
+) -> None:
+    """Check that a meeting will work, and say what to fix if it will not."""
+    report = doctor_mod.run(audio=audio, models=models)
+    typer.echo(doctor_mod.render(report, verbose=verbose))
+    raise typer.Exit(0 if report.ready else 1)
 
 
 @app.command(name="people")
@@ -114,7 +131,7 @@ def start(
     title: str = typer.Option("Meeting", "--title", "-t"),
     attendees: str = typer.Option("", "--people", "-p", help="comma-separated expected attendees"),
     mic: int | None = typer.Option(None, "--mic", help="input device index from `meet devices`"),
-    model: str = typer.Option("small.en", "--model", help="faster-whisper model size"),
+    model: str | None = typer.Option(None, "--model", help="faster-whisper model (default: from setup)"),
     no_jev: bool = typer.Option(False, "--no-jev", help="never consult Jev; ask the human instead"),
     no_extract: bool = typer.Option(False, "--no-extract", help="skip decision/action extraction"),
     plain_ui: bool = typer.Option(False, "--plain", help="line output instead of the full screen"),
@@ -138,7 +155,7 @@ def replay(
     wav: Path = typer.Argument(..., exists=True, dir_okay=False),
     title: str = typer.Option("", "--title", "-t"),
     attendees: str = typer.Option("", "--people", "-p"),
-    model: str = typer.Option("small.en", "--model"),
+    model: str | None = typer.Option(None, "--model"),
     realtime: bool = typer.Option(False, "--realtime", help="pace playback to wall clock"),
     no_jev: bool = typer.Option(False, "--no-jev"),
     no_extract: bool = typer.Option(False, "--no-extract"),
@@ -168,15 +185,25 @@ def _run(
     attendees: str,
     source: Path | None,
     mic: int | None,
-    model: str,
+    model: str | None,
     use_jev: bool,
     extract: bool,
     realtime: bool,
     plain_ui: bool = False,
 ) -> None:
     roster = [name.strip() for name in attendees.split(",") if name.strip()]
-    conn = db.connect()
-    known = db.list_people(conn)
+    # The model `meet setup` downloaded; meetings run offline, so any other
+    # model would fail to load.
+    model = model or runtime.read_manifest().get("asr_model") or "small.en"
+    try:
+        conn = db.connect()
+    except db.DatabaseTooNew as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    # Only a stored voice counts as knowing someone. Attendee names alone create
+    # person rows with no samples, and must not switch off the first-meeting
+    # policy.
+    known = [p for p in db.list_people(conn) if p.sample_count]
     policy = POLICY if known else POLICY.first_meeting()
 
     directory = _slot(title)

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import numpy as np
@@ -441,6 +441,8 @@ class Meeting:
 
     def merge(self, source_key: str, target_key: str) -> bool:
         """Two clusters are one person. Rewrites the source's lines onto the target."""
+        target = self.clusterer.clusters.get(target_key)
+        named_before = target.person_slug if target is not None else None
         if not self.clusterer.merge(source_key, target_key):
             return False
         self.conn.execute(
@@ -450,11 +452,16 @@ class Meeting:
         for line in self.lines:
             if line.cluster_key == source_key:
                 line.cluster_key = target_key
+        # A cluster that was only ever asked about has no row yet; the merge
+        # must still leave a record of where its lines went.
         self.conn.execute(
-            "UPDATE cluster SET merged_into=? WHERE meeting_id=? AND key=?",
-            (target_key, self.id, source_key),
+            "INSERT INTO cluster(meeting_id, key, merged_into, decided_by, decided_at) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(meeting_id, key) DO UPDATE SET merged_into=excluded.merged_into",
+            (self.id, source_key, target_key, "human", db.now()),
         )
         target = self.clusterer.clusters[target_key]
+        if target.person_slug != named_before:
+            self._write_cluster(target_key, target.person_slug, "human")
         people.record_decision(
             self.conn,
             self.id,

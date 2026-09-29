@@ -46,11 +46,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--asr-model", default="small.en")
     parser.add_argument("--compute-type", default="int8")
     parser.add_argument("--vad-threshold", type=float, default=0.5)
+    parser.add_argument("--probe", action="store_true", help="report the installed stack as JSON")
+    parser.add_argument("--prime", action="store_true", help="load (and fetch) every model, report JSON")
+    parser.add_argument("--mic-test", type=float, default=None, metavar="SECONDS",
+                        help="record briefly and report the signal as JSON")
     args = parser.parse_args(argv)
 
     if args.devices:
         print(describe_devices())
         return 0
+    if args.probe or args.prime or args.mic_test is not None:
+        from . import diagnose
+
+        mode = "probe" if args.probe else "prime" if args.prime else "mic"
+        return diagnose.run(mode, args)
     if not args.wav:
         parser.error("--wav is required")
 
@@ -158,10 +167,11 @@ def main(argv: list[str] | None = None) -> int:
     worker_thread.start()
     threading.Thread(target=control, daemon=True, name="control").start()
 
+    source = FileSource(args.file, realtime=args.realtime) if args.file else Microphone(args.device)
     try:
         with sf.SoundFile(
             args.wav, mode="w", samplerate=SAMPLE_RATE, channels=1, subtype="PCM_16"
-        ) as wav, (FileSource(args.file, realtime=args.realtime) if args.file else Microphone(args.device)) as mic:
+        ) as wav, source as mic:
             emit(
                 {
                     "t": "ready",

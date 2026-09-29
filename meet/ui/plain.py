@@ -58,8 +58,13 @@ def _stdin_thread(inbox: "Queue[str | object]") -> None:
     runs out, and a live session with no attached terminal should keep recording
     until the audio stops or someone interrupts it.
     """
-    for line in sys.stdin:
-        inbox.put(line.rstrip("\n"))
+    try:
+        # sys.stdin is None for a process started without a console (a Windows
+        # shortcut, a scheduler); an unreadable stdin means "no commands", too.
+        for line in sys.stdin or ():
+            inbox.put(line.rstrip("\n"))
+    except (OSError, ValueError):
+        pass
     inbox.put(_EOF)
 
 

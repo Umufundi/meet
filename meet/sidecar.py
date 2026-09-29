@@ -10,6 +10,7 @@ dropped meter tick is invisible and a dropped utterance is a hole in the record.
 
 from __future__ import annotations
 
+import json
 import queue
 import subprocess
 import sys
@@ -17,14 +18,31 @@ import threading
 from collections.abc import Iterator
 from pathlib import Path
 
-from . import events
-from .config import repo_root
-
-LISTENER_PYTHON = repo_root() / "listener" / ".venv" / "bin" / "python"
+from . import events, runtime
 
 
 class ListenerMissing(RuntimeError):
     """The listener venv has not been built yet. `meet setup` creates it."""
+
+
+def _interpreter() -> Path:
+    python = runtime.listener_python()
+    if python is None or not python.exists():
+        where = python or runtime.venv_python(runtime.listener_venv())
+        raise ListenerMissing(f"listener runtime not found at {where}; run `meet setup` first")
+    return python
+
+
+def listener_command() -> tuple[list[str], Path]:
+    """argv prefix and working directory for launching the listener."""
+    python = _interpreter()
+    return [str(python), "-m", "meet_listen"], runtime.listener_cwd(python)
+
+
+def _no_window() -> int:
+    # A console window flashing up for the sidecar on Windows is noise at best
+    # and, when launched from a GUI shell, a stray window the user may close.
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0) if runtime.IS_WINDOWS else 0
 
 
 class Listener:
@@ -35,11 +53,16 @@ class Listener:
         device: int | None = None,
         asr_model: str = "small.en",
         max_queue: int = 4096,
+        command: list[str] | None = None,
+        cwd: Path | None = None,
     ) -> None:
-        if not LISTENER_PYTHON.exists():
-            raise ListenerMissing(
-                f"listener interpreter not found at {LISTENER_PYTHON}; run `meet setup` first"
-            )
+        # `command` replaces `python -m meet_listen`; tests use it to put a
+        # scripted listener behind the real process boundary.
+        if command is None:
+            command, default_cwd = listener_command()
+            cwd = cwd or default_cwd
+        self.command = command
+        self.cwd = cwd or runtime.home()
         self.wav_path = wav_path
         self.device = device
         self.asr_model = asr_model
@@ -58,9 +81,7 @@ class Listener:
 
     def start(self) -> None:
         argv = [
-            str(LISTENER_PYTHON),
-            "-m",
-            "meet_listen",
+            *self.command,
             "--wav",
             str(self.wav_path),
             "--asr-model",
@@ -74,12 +95,16 @@ class Listener:
             argv += ["--device", str(self.device)]
         self._process = subprocess.Popen(
             argv,
-            cwd=str(repo_root() / "listener"),
+            cwd=str(self.cwd),
+            env=runtime.listener_env(),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
+            creationflags=_no_window(),
         )
         self._reader = threading.Thread(target=self._pump, daemon=True, name="listener-stdout")
         self._reader.start()
@@ -169,35 +194,80 @@ class Listener:
         return f"listener exit={code}\n{tail}" if tail else f"listener exit={code}"
 
 
-def check_listener() -> tuple[bool, str]:
-    """Report whether the listener venv exists and can import its stack."""
-    if not LISTENER_PYTHON.exists():
-        return False, f"missing interpreter: {LISTENER_PYTHON}"
-    probe = subprocess.run(
-        [str(LISTENER_PYTHON), "-c", "import sounddevice, faster_whisper, speechbrain; print('ok')"],
+def _run_listener(
+    args: list[str], timeout: float, offline: bool | None = None
+) -> subprocess.CompletedProcess:
+    argv, cwd = listener_command()
+    return subprocess.run(
+        [*argv, *args],
         capture_output=True,
         text=True,
-        timeout=180,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(cwd),
+        env=runtime.listener_env(offline=offline),
+        timeout=timeout,
+        creationflags=_no_window(),
     )
-    if probe.returncode != 0:
-        return False, (probe.stderr or probe.stdout).strip().splitlines()[-1:][0] if (
-            probe.stderr or probe.stdout
-        ) else "import failed"
+
+
+def _json_result(proc: subprocess.CompletedProcess) -> dict:
+    """The last JSON object the listener printed, or an error record."""
+    for line in reversed(proc.stdout.strip().splitlines()):
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+    return {"ok": False, "error": tail[-1] if tail else f"exit {proc.returncode}"}
+
+
+def probe(timeout: float = 180.0) -> dict:
+    """Ask the listener what it has: package versions, embedding model id,
+    input devices. Imports the stack but loads no model weights."""
+    try:
+        return _json_result(_run_listener(["--probe"], timeout))
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"listener probe timed out after {timeout:.0f}s"}
+
+
+def prime(asr_model: str, timeout: float = 3600.0, offline: bool = False) -> dict:
+    """Load every model once, downloading if needed, and report what was loaded."""
+    try:
+        return _json_result(
+            _run_listener(["--prime", "--asr-model", asr_model], timeout, offline=offline)
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"model load timed out after {timeout:.0f}s"}
+
+
+def mic_test(seconds: float = 3.0, device: int | None = None) -> dict:
+    """Record a few seconds and report level, clipping, and noise."""
+    args = ["--mic-test", str(seconds)]
+    if device is not None:
+        args += ["--device", str(device)]
+    try:
+        return _json_result(_run_listener(args, timeout=seconds + 60.0))
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "microphone test timed out"}
+
+
+def check_listener() -> tuple[bool, str]:
+    """Report whether the listener runtime exists and can import its stack."""
+    try:
+        info = probe()
+    except ListenerMissing as exc:
+        return False, str(exc)
+    if not info.get("ok"):
+        return False, str(info.get("error") or "import failed")
     return True, "ok"
 
 
 def list_devices() -> str:
     """Input devices, as the listener's audio backend sees them."""
-    if not LISTENER_PYTHON.exists():
-        raise ListenerMissing(f"listener interpreter not found at {LISTENER_PYTHON}")
-    probe = subprocess.run(
-        [str(LISTENER_PYTHON), "-m", "meet_listen", "--devices"],
-        capture_output=True,
-        text=True,
-        cwd=str(repo_root() / "listener"),
-        timeout=60,
-    )
-    return probe.stdout or probe.stderr or ""
+    return _run_listener(["--devices"], timeout=60).stdout or ""
 
 
 if __name__ == "__main__":  # manual probe: python -m meet.sidecar
