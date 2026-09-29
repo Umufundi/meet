@@ -22,6 +22,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.reactive import reactive
 from textual.suggester import SuggestFromList
 from textual.widgets import Input, Static
@@ -195,6 +196,16 @@ class MeetApp(App):
     # ── event pump ─────────────────────────────────────────────────────────
 
     def pump(self) -> None:
+        # The timers keep firing while the app tears down after /end; by then
+        # the widgets are gone and a query would raise into the user's face.
+        if self.finished:
+            return
+        try:
+            self._pump()
+        except NoMatches:
+            return
+
+    def _pump(self) -> None:
         log = self.query_one("#transcript", VerticalScroll)
         appended = False
         for event in self.listener.drain():
@@ -231,6 +242,14 @@ class MeetApp(App):
         self.query_one("#question", QuestionPanel).show(self.meeting)
 
     def tick(self) -> None:
+        if self.finished:
+            return
+        try:
+            self._tick()
+        except NoMatches:
+            return
+
+    def _tick(self) -> None:
         self.elapsed = int(time.monotonic() - self._started)
         bars = min(12, int(self.level * 40))
         meter = "▌" * bars + "·" * (12 - bars)

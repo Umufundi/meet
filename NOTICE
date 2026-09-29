@@ -1,6 +1,9 @@
 meet — terminal meeting identity tool
 Copyright (c) 2026 FY Network
 
+Licensed under the Apache License, Version 2.0 (see LICENSE). You may not use
+this project except in compliance with that License.
+
 This product's design draws on the following MIT-licensed projects. No source
 was copied verbatim; the debts are architectural and are recorded here because
 the ideas are the valuable part.
