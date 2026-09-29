@@ -18,11 +18,11 @@ echo "MEET INSTALL"
 PYTHON=""
 for candidate in python3.13 python3.12 python3; do
     if command -v "$candidate" >/dev/null 2>&1 &&
-        "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 12))' 2>/dev/null; then
+        "$candidate" -c 'import sys; sys.exit(sys.version_info[:2] not in ((3, 12), (3, 13)))' 2>/dev/null; then
         PYTHON="$candidate"; break
     fi
 done
-[ -n "$PYTHON" ] || fail "Python 3.12 or newer was not found" "Install it (macOS: brew install python@3.12) and re-run."
+[ -n "$PYTHON" ] || fail "Python 3.12 or 3.13 was not found" "Install it (macOS: brew install python@3.12) and re-run."
 echo "  + $($PYTHON --version)"
 
 mkdir -p "$MEET_HOME" "$BIN"

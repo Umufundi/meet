@@ -97,6 +97,19 @@ def test_unsupported_machines_are_named_before_setup(system, machine, mac, block
         assert problem and fix
 
 
+@pytest.mark.parametrize("version, ok", [
+    ((3, 11), False), ((3, 12), True), ((3, 13), True), ((3, 14), False),
+])
+def test_python_range_matches_what_the_lock_is_verified_for(version, ok):
+    assert (runtime.python_problem(version) is None) == ok
+
+
+def test_macos_12_needs_python_312():
+    assert runtime.unsupported_reason("darwin", "arm64", (12, 7), (3, 13)) is not None
+    assert runtime.unsupported_reason("darwin", "arm64", (12, 7), (3, 12)) is None
+    assert runtime.unsupported_reason("darwin", "arm64", (13, 0), (3, 13)) is None
+
+
 # ── credentials ────────────────────────────────────────────────────────
 
 

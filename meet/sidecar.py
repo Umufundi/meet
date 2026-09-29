@@ -211,15 +211,23 @@ def _run_listener(
     )
 
 
-def _json_result(proc: subprocess.CompletedProcess) -> dict:
-    """The last JSON object the listener printed, or an error record."""
-    for line in reversed(proc.stdout.strip().splitlines()):
+def last_json(text: str) -> dict | None:
+    """The last JSON object in a block of output, if any."""
+    for line in reversed((text or "").strip().splitlines()):
         try:
             data = json.loads(line)
         except json.JSONDecodeError:
             continue
         if isinstance(data, dict):
             return data
+    return None
+
+
+def _json_result(proc: subprocess.CompletedProcess) -> dict:
+    """The last JSON object the listener printed, or an error record."""
+    data = last_json(proc.stdout)
+    if data is not None:
+        return data
     tail = (proc.stderr or proc.stdout or "").strip().splitlines()
     return {"ok": False, "error": tail[-1] if tail else f"exit {proc.returncode}"}
 

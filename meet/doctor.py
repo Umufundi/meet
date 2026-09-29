@@ -99,12 +99,11 @@ def mic_fix() -> str:
 
 def _runtime(report: Report, probe: dict | None, manifest: dict) -> None:
     s = "Runtime"
-    v = sys.version_info
-    if v >= (3, 12):
-        report.add(s, f"Python {platform.python_version()}", OK)
+    wrong = runtime.python_problem()
+    if wrong:
+        report.add(s, f"Python {platform.python_version()}", FAIL, *wrong)
     else:
-        report.add(s, f"Python {platform.python_version()}", FAIL, "Meet needs Python 3.12 or newer",
-                   "Install Python 3.12 (Windows: `winget install Python.Python.3.12`) and reinstall Meet.")
+        report.add(s, f"Python {platform.python_version()}", OK)
     blocked = runtime.unsupported_reason()
     if blocked:
         report.add(s, "this computer", FAIL, blocked[0], blocked[1])

@@ -20,12 +20,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import doctor, runtime, sidecar
+from . import doctor, progress, runtime, sidecar
 from .memory import db
 
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
@@ -121,29 +122,93 @@ class Setup:
     def warn(self, text: str) -> None:
         self.echo(f"  {self.marks['warn']} {text}")
 
-    def _run(self, argv: list[str], what: str, timeout: float = 3600) -> None:
+    def _run(
+        self,
+        argv: list[str],
+        what: str,
+        timeout: float = 3600,
+        *,
+        on_line: Callable[[str], None] | None = None,
+        render: Callable[[str], str] | None = None,
+        env: dict[str, str] | None = None,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> str:
+        """Run one step: output streams to the log (and `on_line`), a live
+        gauge shows progress, and the captured output is returned."""
+        captured: list[str] = []
+        timed_out = threading.Event()
         with self.log_path.open("a", encoding="utf-8") as log:
             log.write(f"\n$ {' '.join(argv)}\n")
             log.flush()
             try:
-                proc = subprocess.run(argv, stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
-            except (OSError, subprocess.TimeoutExpired) as exc:
+                proc = subprocess.Popen(
+                    argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                    errors="replace", bufsize=1, env=env, cwd=str(cwd) if cwd else None,
+                    creationflags=sidecar._no_window(),
+                )
+            except OSError as exc:
                 raise SetupFailed(f"{what} failed: {exc}", f"See {self.log_path}") from None
-        if proc.returncode != 0:
-            tail = self.log_path.read_text(encoding="utf-8", errors="replace").strip().splitlines()[-6:]
+
+            def expire() -> None:
+                timed_out.set()
+                proc.kill()
+
+            timer = threading.Timer(timeout, expire)
+            timer.daemon = True
+            timer.start()
+            try:
+                with progress.Gauge(render or (lambda t: f"{what}  {t}")):
+                    assert proc.stdout is not None
+                    for line in proc.stdout:
+                        log.write(line)
+                        captured.append(line)
+                        if on_line is not None:
+                            on_line(line.rstrip())
+                    proc.wait()
+            finally:
+                timer.cancel()
+        if timed_out.is_set():
+            raise SetupFailed(f"{what} timed out after {timeout / 60:.0f} minutes",
+                              f"Check your internet connection and re-run `meet setup`. Log: {self.log_path}")
+        if check and proc.returncode != 0:
+            tail = [line.rstrip() for line in captured if line.strip()][-6:]
             raise SetupFailed(
                 f"{what} failed\n      " + "\n      ".join(tail),
                 f"Check your internet connection and re-run `meet setup`. Full log: {self.log_path}",
             )
+        return "".join(captured)
+
+    def _pip(self, argv: list[str], what: str, total: int) -> None:
+        """pip with a package-count gauge. pip prints `Collecting <pin>` as it
+        starts each package and `Ignoring` for ones whose markers exclude this
+        machine, which is enough for an honest bar."""
+        state = {"done": 0, "total": total, "name": "", "installing": False}
+
+        def on_line(line: str) -> None:
+            if line.startswith("Collecting "):
+                state["done"] += 1
+                state["name"] = line.split()[1].split("==")[0]
+            elif line.startswith("Ignoring "):
+                state["total"] -= 1
+            elif line.startswith("Installing collected packages"):
+                state["installing"] = True
+
+        def render(elapsed: str) -> str:
+            if state["installing"]:
+                return f"installing {state['total']} packages (large ones take a minute)  {elapsed}"
+            glyphs = progress._glyphs(sys.stdout)
+            gauge = progress.bar(state["done"], state["total"], glyphs)
+            return f"[{gauge}] {state['done']}/{state['total']}  {state['name']}  {elapsed}"
+
+        self._run(argv, what, on_line=on_line, render=render)
 
     # ── steps ──────────────────────────────────────────────────────────
 
     def check_python(self) -> None:
-        if sys.version_info < (3, 12):
-            raise SetupFailed(
-                f"Python {sys.version.split()[0]} is too old",
-                "Install Python 3.12 (Windows: `winget install Python.Python.3.12`) and reinstall Meet.",
-            )
+        wrong = runtime.python_problem()
+        if wrong:
+            raise SetupFailed(*wrong)
         self.ok(f"Python {sys.version.split()[0]}")
         blocked = runtime.unsupported_reason()
         if blocked:
@@ -178,14 +243,14 @@ class Setup:
         hashed, torch = split_lock(lock, cpu_torch=self.cpu_torch)
         if torch:
             pins = [f"{name}=={version}" for name, version in sorted(torch.items())]
-            self._run([*pip, "--no-deps", "--index-url", TORCH_CPU_INDEX, *pins], "installing CPU PyTorch")
+            self._pip([*pip, "--no-deps", "--index-url", TORCH_CPU_INDEX, *pins], "installing CPU PyTorch",
+                      len(pins))
             self.ok(f"CPU PyTorch {torch.get('torch', '')}")
         with tempfile.TemporaryDirectory() as tmp:
             req = Path(tmp) / "requirements.txt"
             req.write_text(hashed, encoding="utf-8")
-            self._run(
-                [*pip, "--require-hashes", "--no-deps", "-r", str(req)], "installing locked dependencies"
-            )
+            self._pip([*pip, "--require-hashes", "--no-deps", "-r", str(req)],
+                      "installing locked dependencies", len(parse_lock(hashed)))
         self.ok("locked dependencies")
         self._run([*pip, "--no-deps", "--force-reinstall", str(root)], "installing the listener")
         self.ok("listener")
@@ -206,8 +271,25 @@ class Setup:
         self.ok(f"database (schema {db.schema_version(conn)})")
 
     def models(self) -> dict:
-        self.echo(f"    downloading models ({self.asr_model} + speaker + VAD), this can take a few minutes")
-        result = sidecar.prime(self.asr_model, offline=False)
+        self.echo(f"    downloading models ({self.asr_model} + speaker + VAD), about 0.6 GB")
+        argv, cwd = sidecar.listener_command()
+        env = runtime.listener_env(offline=False)
+        cache = Path(env["HF_HOME"])
+        before = progress.folder_mb(cache)
+        phase = {"text": "starting"}
+
+        def on_line(line: str) -> None:
+            if line.startswith("loading "):
+                phase["text"] = line
+
+        def render(elapsed: str) -> str:
+            got = max(0.0, progress.folder_mb(cache) - before)
+            return f"{phase['text']} · {got:.0f} MB downloaded  {elapsed}"
+
+        out = self._run([*argv, "--prime", "--asr-model", self.asr_model], "downloading models",
+                        on_line=on_line, render=render, env=env, cwd=cwd, check=False)
+        last = (out.strip().splitlines() or ["no output"])[-1]
+        result = sidecar.last_json(out) or {"ok": False, "error": last}
         if not result.get("ok"):
             raise SetupFailed(
                 f"model download failed: {result.get('error')}",

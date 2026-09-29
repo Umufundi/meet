@@ -7,7 +7,8 @@
 # what lets the core start in milliseconds and stay swappable.
 name = "meet-listen"
 version = "0.1.0"
-requires-python = ">=3.12"
+# The lock is verified for exactly these; a newer Python needs a new check.
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "numpy>=2.1",
     "sounddevice>=0.5",
@@ -22,8 +23,11 @@ dependencies = [
     # Apple Silicon Macs on macOS 12+. Both are pulled in by faster-whisper and
     # barely used (its own VAD is off, and it gets arrays, not files to decode),
     # but newer releases only ship wheels for macOS 13/14+. scipy (speechbrain)
-    # sets the macOS 12 floor. Check every package's floor before lifting these.
-    "onnxruntime>=1.16,<1.20",
+    # sets the macOS 12 floor. onnxruntime < 1.20 has no Python 3.13 wheels, so
+    # 3.13 gets 1.20-1.23 (macOS 13+). Check every package's wheels for BOTH
+    # Python versions before lifting these.
+    "onnxruntime>=1.16,<1.20; python_version < '3.13'",
+    "onnxruntime>=1.20,<1.24; python_version >= '3.13'",
     "av>=11,<14.3",
 ]
 
