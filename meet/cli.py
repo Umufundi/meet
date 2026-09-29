@@ -82,6 +82,20 @@ def setup(
     raise typer.Exit(0 if ok else 1)
 
 
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def update(ctx: typer.Context) -> None:
+    """Update Meet to the latest version (`--check` only reports)."""
+    if runtime.IS_WINDOWS and Path(sys.argv[0]).suffix.lower() == ".exe":
+        # Started through the old meet.exe launcher, which this very update
+        # would have to overwrite while it runs. Newer installs never get here.
+        typer.secho("this install predates `meet update`: run scripts\\install.ps1 from a fresh "
+                    "download once, and `meet update` works from then on", fg=typer.colors.YELLOW)
+        raise typer.Exit(1)
+    from . import update as updater
+
+    raise typer.Exit(updater.main(list(ctx.args)))
+
+
 @app.command()
 def doctor(
     audio: bool = typer.Option(False, "--audio", help="also record 3 seconds from the microphone"),

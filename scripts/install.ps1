@@ -89,7 +89,10 @@ Say "+ Meet app in $Core"
 
 # ── `meet` on PATH ──────────────────────────────────────────────────────
 $Shim = Join-Path $Bin "meet.cmd"
-Set-Content -Path $Shim -Encoding ASCII -Value "@echo off`r`n`"$Core\Scripts\meet.exe`" %*"
+# One line, never changed afterwards: cmd.exe reads a running .cmd from disk
+# line by line, so a shim rewritten during `meet update` could run garbage.
+# `python -m meet` (not meet.exe) so an update can replace every Meet file.
+Set-Content -Path $Shim -Encoding ASCII -Value "@`"$Core\Scripts\python.exe`" -m meet %*"
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if (-not $UserPath) { $UserPath = "" }
 if (-not (($UserPath -split ";") -contains $Bin)) {

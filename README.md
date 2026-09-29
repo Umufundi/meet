@@ -42,7 +42,19 @@ install the app into `~/.meet/core`, put `meet` on your PATH, and run
 - initializes `~/.meet/voices.db`, tests the microphone, and runs `meet doctor`.
 
 Everything lives under `~/.meet` (`%USERPROFILE%\.meet`); set `MEET_HOME` to
-move it.
+move it. After this first install, the downloaded folder can be deleted.
+
+## Update
+
+```sh
+meet update           # pull the latest, reinstall, rebuild only what changed
+meet update --check   # just say whether an update is waiting
+```
+
+Meet keeps its own copy of the code in `~/.meet/src` and uses Git to fetch it
+(`winget install Git.Git` on Windows). The repository is private, so the first
+update may open a browser to sign in to GitHub; Git remembers it after that.
+Models are never downloaded again, and your voices and meetings are untouched.
 
 ## Use
 

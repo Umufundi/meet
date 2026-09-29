@@ -31,7 +31,9 @@ mkdir -p "$MEET_HOME" "$BIN"
 PIP="$CORE/bin/python -m pip --disable-pip-version-check install --no-input --quiet"
 $PIP --require-hashes --no-deps -r "$SOURCE/requirements.lock" || fail "installing dependencies failed" "Check your connection."
 $PIP --no-deps --force-reinstall "$SOURCE" || fail "installing Meet failed" "See the error above."
-ln -sf "$CORE/bin/meet" "$BIN/meet"
+rm -f "$BIN/meet"
+printf '#!/bin/sh\nexec "%s/bin/python" -m meet "$@"\n' "$CORE" > "$BIN/meet"
+chmod +x "$BIN/meet"
 echo "  + Meet app in $CORE"
 
 case ":$PATH:" in
