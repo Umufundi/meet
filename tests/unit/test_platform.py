@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from meet import runtime
 from meet.identity import credentials
 from tests.conftest import REAL_LOOKUP
@@ -76,6 +78,23 @@ def test_source_digest_tracks_listener_code(tmp_path):
 
 def test_listener_source_is_the_checkout_in_development():
     assert runtime.listener_source() == Path(__file__).resolve().parents[2] / "listener"
+
+
+@pytest.mark.parametrize("system, machine, mac, blocked", [
+    ("win32", "AMD64", None, False),          # Windows 10/11 x64
+    ("win32", "ARM64", None, True),           # native ARM Python: no torch wheel
+    ("darwin", "arm64", (12, 0), False),      # Monterey, the locked floor
+    ("darwin", "arm64", (14, 5), False),
+    ("darwin", "arm64", (11, 7), True),       # Big Sur: scipy/PyAV have no wheel
+    ("darwin", "x86_64", (14, 5), True),      # Intel, or Python under Rosetta
+    ("linux", "x86_64", None, False),
+])
+def test_unsupported_machines_are_named_before_setup(system, machine, mac, blocked):
+    reason = runtime.unsupported_reason(system, machine, mac)
+    assert (reason is not None) == blocked
+    if reason:
+        problem, fix = reason
+        assert problem and fix
 
 
 # ── credentials ────────────────────────────────────────────────────────

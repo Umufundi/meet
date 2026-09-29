@@ -145,6 +145,9 @@ class Setup:
                 "Install Python 3.12 (Windows: `winget install Python.Python.3.12`) and reinstall Meet.",
             )
         self.ok(f"Python {sys.version.split()[0]}")
+        blocked = runtime.unsupported_reason()
+        if blocked:
+            raise SetupFailed(blocked[0], blocked[1])
 
     def make_dirs(self) -> None:
         for path in (runtime.runtime_dir(), runtime.models_dir(), runtime.logs_dir()):

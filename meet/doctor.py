@@ -73,15 +73,24 @@ def os_name() -> str:
 
 def mic_fix() -> str:
     if runtime.IS_WINDOWS:
+        # Windows 11 renamed the page; Windows 10 users cannot find the new name.
+        where = (
+            "Settings > Privacy & security > Microphone"
+            if runtime.windows_build() >= 22000
+            else "Settings > Privacy > Microphone"
+        )
         return (
-            "Windows may be blocking the microphone. Open Settings > Privacy & security > "
-            "Microphone, allow desktop apps to access it, then run `meet doctor --audio`."
+            f"Windows may be blocking the microphone. Open {where}, turn on "
+            "\"Allow desktop apps to access your microphone\", then run `meet doctor --audio`."
         )
     if runtime.IS_MACOS:
-        return (
-            "Allow your terminal in System Settings > Privacy & Security > Microphone, "
-            "then run `meet doctor --audio`."
+        # macOS 13 replaced System Preferences with System Settings.
+        where = (
+            "System Settings > Privacy & Security > Microphone"
+            if runtime.macos_version() >= (13,)
+            else "System Preferences > Security & Privacy > Privacy > Microphone"
         )
+        return f"Allow your terminal in {where}, then run `meet doctor --audio`."
     return "Check the input is not muted (e.g. `pavucontrol`), then run `meet doctor --audio`."
 
 
@@ -96,6 +105,9 @@ def _runtime(report: Report, probe: dict | None, manifest: dict) -> None:
     else:
         report.add(s, f"Python {platform.python_version()}", FAIL, "Meet needs Python 3.12 or newer",
                    "Install Python 3.12 (Windows: `winget install Python.Python.3.12`) and reinstall Meet.")
+    blocked = runtime.unsupported_reason()
+    if blocked:
+        report.add(s, "this computer", FAIL, blocked[0], blocked[1])
 
     python = runtime.listener_python()
     if python is None or not python.exists():

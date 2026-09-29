@@ -1,3 +1,5 @@
+import pytest
+
 from meet import doctor, runtime
 
 GOOD_PROBE = {
@@ -55,14 +57,38 @@ def test_jev_is_never_a_blocker(monkeypatch, tmp_path):
     assert report.ready
 
 
-def test_windows_privacy_block_is_explained(monkeypatch, tmp_path):
+@pytest.mark.parametrize("build, path", [
+    (22631, "Settings > Privacy & security > Microphone"),   # Windows 11
+    (19045, "Settings > Privacy > Microphone"),              # Windows 10 22H2
+])
+def test_windows_privacy_block_names_the_right_settings_page(monkeypatch, tmp_path, build, path):
     install_listener(monkeypatch, tmp_path)
     primed()
     monkeypatch.setattr(runtime, "IS_WINDOWS", True)
+    monkeypatch.setattr(runtime, "windows_build", lambda: build)
     silent = {**GOOD_MIC, "all_zero": True, "peak": 0.0}
     report = doctor.run(audio=True, probe_fn=lambda: GOOD_PROBE, mic_fn=lambda: silent)
     assert not report.ready
-    assert "Privacy & security > Microphone" in report.failures[0].fix
+    assert path in report.failures[0].fix
+
+
+@pytest.mark.parametrize("version, path", [
+    ((14, 5), "System Settings > Privacy & Security > Microphone"),
+    ((12, 7), "System Preferences > Security & Privacy > Privacy > Microphone"),
+])
+def test_macos_microphone_fix_matches_the_os_version(monkeypatch, version, path):
+    monkeypatch.setattr(runtime, "IS_WINDOWS", False)
+    monkeypatch.setattr(runtime, "IS_MACOS", True)
+    monkeypatch.setattr(runtime, "macos_version", lambda: version)
+    assert path in doctor.mic_fix()
+
+
+def test_unsupported_computer_is_a_failure_with_a_fix(monkeypatch, tmp_path):
+    install_listener(monkeypatch, tmp_path)
+    primed()
+    monkeypatch.setattr(runtime, "unsupported_reason", lambda: ("Intel Macs are not supported", "Use M1+"))
+    report = doctor.run(probe_fn=lambda: GOOD_PROBE)
+    assert [c.label for c in report.failures] == ["this computer"]
 
 
 def test_no_microphone(monkeypatch, tmp_path):
