@@ -18,12 +18,19 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Source = (Split-Path -Parent $PSScriptRoot),
+    [string]$Source = "",
     [string]$Model = "small.en",
     [switch]$SkipSetup
 )
 
 $ErrorActionPreference = "Stop"
+# Resolved here, not as a param default: Windows PowerShell 5.1 leaves
+# $PSScriptRoot empty while evaluating param() defaults under -File.
+if (-not $Source) {
+    $Here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+    $Source = Split-Path -Parent $Here
+}
+if (Test-Path $Source) { $Source = (Resolve-Path $Source).Path }
 $MeetHome = if ($env:MEET_HOME) { $env:MEET_HOME } else { Join-Path $env:USERPROFILE ".meet" }
 $Core = Join-Path $MeetHome "core"
 $Bin = Join-Path $MeetHome "bin"
