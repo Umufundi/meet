@@ -13,10 +13,11 @@ Supported computers:
 | | Supported | Not supported |
 |---|---|---|
 | Windows | 10 and 11, x64 (Intel/AMD) | native ARM64 Python (Snapdragon laptops: install x64 Python instead) |
-| macOS | Apple Silicon (M1 and later), macOS 12 Monterey or newer | Intel Macs, macOS 11 and older |
+| macOS | Apple Silicon (M1 and later), macOS 13+ (macOS 12 with Python 3.12) | Intel Macs, macOS 11 and older |
 | Linux | x64 | |
 
-`meet setup` and `meet doctor` check this first and say so plainly.
+Python 3.12 or 3.13. `meet setup` and `meet doctor` check all of this first
+and say so plainly.
 
 **Windows** (PowerShell, no admin rights needed):
 
@@ -30,7 +31,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 sh scripts/install.sh
 ```
 
-Both need Python 3.12+ (`winget install Python.Python.3.12` on Windows). They
+Both need Python 3.12 or 3.13 (`winget install Python.Python.3.12` on Windows). They
 install the app into `~/.meet/core`, put `meet` on your PATH, and run
 `meet setup`, which:
 
@@ -89,7 +90,12 @@ Regenerate a lock after changing dependencies:
 ```sh
 uv pip compile listener/pyproject.toml --universal --python-version 3.12 --generate-hashes -o listener/requirements.lock
 uv pip compile pyproject.toml --universal --python-version 3.12 --generate-hashes -o requirements.lock
+.venv/bin/python scripts/check_wheels.py   # every pin has a wheel for every supported computer
 ```
+
+A lock that resolves is not a lock that installs: a pinned version can lack a
+wheel for one Python or OS. `check_wheels.py` checks Python 3.12 and 3.13 on
+Windows x64, macOS arm64 and Linux x64 against PyPI.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the V1 contract, quality gates, and
 the order work is done in.

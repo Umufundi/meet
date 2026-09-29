@@ -142,10 +142,14 @@ Status: ✅ done · 🟡 partial · ⬜ not started
 - **Linux setup needs the PyTorch CPU index** (download.pytorch.org). Where it
   is blocked, `meet setup --torch-index pypi` works but pulls the CUDA build
   (~5 GB). Windows and macOS always use PyPI's CPU wheels.
-- **Platform floor.** Windows 10/11 x64; Apple Silicon on macOS 12+; Linux x64.
+- **Platform floor.** Windows 10/11 x64; Apple Silicon on macOS 13+ (12 with
+  Python 3.12); Linux x64; Python 3.12 or 3.13 only.
   PyTorch ships no Intel-Mac or Windows-ARM64 build of the locked version.
   `onnxruntime < 1.20` and `av < 14.3` are pinned only to keep macOS 12 and
   13 installable (newer releases need macOS 13/14); scipy (via speechbrain)
-  sets the macOS 12 floor. `tests/unit/test_setup.py` guards these pins.
+  sets the macOS 12 floor. onnxruntime has no Python 3.13 wheel below 1.20, so
+  the lock splits by Python version (found by the first real Windows install,
+  which picked 3.13). `scripts/check_wheels.py` verifies every pin on every
+  target; run it after each re-lock. `tests/unit/test_setup.py` guards the pins.
 - **torchaudio stopped at 2.11.** The listener is capped at torch < 2.12 until
   speechbrain no longer needs torchaudio or an alternative is chosen.

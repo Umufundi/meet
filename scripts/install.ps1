@@ -55,14 +55,15 @@ foreach ($candidate in @("py -3.13", "py -3.12", "python")) {
         $exe = $parts[0]
         $rest = @($parts | Select-Object -Skip 1)
         $version = & $exe @rest -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
-        if ($LASTEXITCODE -eq 0 -and $version -and [version]$version -ge [version]"3.12") {
+        # Only the versions the lock is verified for (see scripts/check_wheels.py).
+        if ($LASTEXITCODE -eq 0 -and $version -in @("3.12", "3.13")) {
             $Python = $parts
             break
         }
     } catch { }
 }
 if (-not $Python) {
-    Fail "Python 3.12 or newer was not found" "Install it with:  winget install Python.Python.3.12   then open a new terminal and re-run this script."
+    Fail "Python 3.12 or 3.13 was not found" "Install it with:  winget install Python.Python.3.12   then open a new terminal and re-run this script."
 }
 $PyExe = $Python[0]
 $PyArgs = @($Python | Select-Object -Skip 1)

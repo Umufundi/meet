@@ -57,8 +57,27 @@ def macos_version() -> tuple[int, ...]:
     return tuple(int(x) for x in raw.split(".") if x.isdigit()) if raw else ()
 
 
+# Python versions the locks are verified for (scripts/check_wheels.py).
+SUPPORTED_PYTHONS = ((3, 12), (3, 13))
+
+
+def python_problem(version: tuple[int, ...] | None = None) -> tuple[str, str] | None:
+    """(problem, fix) when this Python is outside the verified range, else None."""
+    v = tuple((version or sys.version_info)[:2])
+    if v in SUPPORTED_PYTHONS:
+        return None
+    shown = ".".join(map(str, v))
+    install = "Install Python 3.12 (Windows: `winget install Python.Python.3.12`) and reinstall Meet."
+    if v < SUPPORTED_PYTHONS[0]:
+        return f"Python {shown} is too old; Meet needs 3.12 or 3.13", install
+    return f"Python {shown} is newer than Meet has been verified on (3.12 and 3.13)", install
+
+
 def unsupported_reason(
-    system: str | None = None, machine: str | None = None, mac: tuple[int, ...] | None = None
+    system: str | None = None,
+    machine: str | None = None,
+    mac: tuple[int, ...] | None = None,
+    python: tuple[int, ...] | None = None,
 ) -> tuple[str, str] | None:
     """(problem, fix) when the listener stack cannot install here, else None.
 
@@ -79,6 +98,13 @@ def unsupported_reason(
         if mac and mac < MIN_MACOS:
             shown = ".".join(map(str, mac))
             return (f"macOS {shown} is too old", "Meet needs macOS 12 (Monterey) or newer.")
+        python = tuple((python or sys.version_info)[:2])
+        if mac and mac < (13,) and python >= (3, 13):
+            # onnxruntime ships Python 3.13 wheels only for macOS 13+.
+            return (
+                "on macOS 12, Meet needs Python 3.12 (a dependency has no Python 3.13 build for it)",
+                "Install Python 3.12 from python.org, then reinstall Meet with it.",
+            )
     if system == "win32" and machine == "arm64":
         return (
             "native ARM64 Python on Windows is not supported (PyTorch has no Windows ARM build)",
