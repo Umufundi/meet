@@ -61,21 +61,48 @@ def _record(commit: str) -> None:
     path.write_text(json.dumps({"commit": commit, "repo": REPO, "branch": BRANCH}), encoding="utf-8")
 
 
-def _git(git: str, *args: str, cwd: Path | None = None, capture: bool = True) -> str:
+# What GitHub says when Git sent no login, or a login for an account that
+# cannot see the private repository: it answers "not found", not "forbidden".
+SIGN_IN_SIGNS = ("repository not found", "authentication failed", "could not read username",
+                 "403", "401", "permission denied", "terminal prompts disabled")
+
+SIGN_IN_FIX = (
+    "Git is not signed in to a GitHub account that can see this private repository.\n"
+    "      Check which account Git uses:   git credential-manager github list\n"
+    "      Sign in (opens a browser):      git credential-manager github login\n"
+    "      Remove a wrong account first:   git credential-manager github logout <name>\n"
+    "      then run `meet update` again. (No `git credential-manager`? `winget upgrade Git.Git`.)"
+)
+
+
+def failure_fix(stderr: str) -> str:
+    """The one next step for a failed git command, judged from what git said."""
+    text = stderr.lower()
+    if any(sign in text for sign in SIGN_IN_SIGNS):
+        return SIGN_IN_FIX
+    if "could not resolve host" in text or "unable to access" in text:
+        return "Check your internet connection and run `meet update` again."
+    return "Run `meet update` again; if it keeps failing, send the message above."
+
+
+def _git(git: str, *args: str, cwd: Path | None = None, interactive: bool = False) -> str:
+    """Run git. `interactive` leaves stdout on the terminal (clone progress,
+    sign-in prompts, which git writes to the console itself) and still
+    captures stderr, so a failure can be explained rather than just echoed."""
     try:
         proc = subprocess.run(
             [git, *args], cwd=str(cwd) if cwd else None, text=True, encoding="utf-8", errors="replace",
-            capture_output=capture,
+            stdout=None if interactive else subprocess.PIPE, stderr=subprocess.PIPE,
         )
     except OSError as exc:
         raise UpdateFailed(f"git failed: {exc}") from None
     if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip().splitlines() if capture else []
+        stderr = (proc.stderr or proc.stdout or "").strip()
+        lines = [ln.strip() for ln in stderr.splitlines() if ln.strip()]
         raise UpdateFailed(
-            f"git {args[0]} failed" + (f": {detail[-1]}" if detail else ""),
-            "Check your internet connection and that your GitHub account can see the Meet repository.",
+            f"git {args[0]} failed" + (f": {lines[-1]}" if lines else ""), failure_fix(stderr)
         )
-    return (proc.stdout or "").strip() if capture else ""
+    return (proc.stdout or "").strip()
 
 
 def _pip_install(src: Path) -> None:
@@ -118,7 +145,7 @@ def run(
         if src.exists():
             shutil.rmtree(src)
         echo("getting the Meet code (first time only; GitHub may ask you to sign in)")
-        _git(git, "clone", "--quiet", "--branch", branch, repo, str(src), capture=False)
+        _git(git, "clone", "--quiet", "--branch", branch, repo, str(src), interactive=True)
     else:
         _git(git, "fetch", "--quiet", "origin", branch, cwd=src)
 

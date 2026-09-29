@@ -86,6 +86,19 @@ def test_unreachable_repo_is_a_clear_failure(tmp_path):
     assert "git clone failed" in str(err.value)
 
 
+@pytest.mark.parametrize("stderr, expect", [
+    ("remote: Repository not found.\nfatal: repository 'https://github.com/Umufundi/meet.git/' not found",
+     "credential-manager github login"),
+    ("fatal: Authentication failed for 'https://github.com/Umufundi/meet.git/'", "credential-manager"),
+    ("fatal: unable to access '...': Could not resolve host: github.com", "internet connection"),
+    ("fatal: something else entirely", "run `meet update` again"),
+])
+def test_failures_say_what_to_do(stderr, expect):
+    """The first real Windows `meet update` hit "Repository not found": GitHub's
+    answer to a private repo when Git sends no login (or the wrong account)."""
+    assert expect.lower() in update.failure_fix(stderr).lower()
+
+
 def test_update_never_imports_the_rest_of_meet():
     """On Windows a loaded DLL cannot be replaced; the updater must load none."""
     probe = (
