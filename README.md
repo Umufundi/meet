@@ -8,6 +8,16 @@ locally; the internet is needed once, at setup.
 
 ## Install
 
+Supported computers:
+
+| | Supported | Not supported |
+|---|---|---|
+| Windows | 10 and 11, x64 (Intel/AMD) | native ARM64 Python (Snapdragon laptops: install x64 Python instead) |
+| macOS | Apple Silicon (M1 and later), macOS 12 Monterey or newer | Intel Macs, macOS 11 and older |
+| Linux | x64 | |
+
+`meet setup` and `meet doctor` check this first and say so plainly.
+
 **Windows** (PowerShell, no admin rights needed):
 
 ```powershell

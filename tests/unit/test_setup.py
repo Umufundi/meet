@@ -41,6 +41,22 @@ def test_parse_keeps_markers_and_continuations():
     assert reqs[0].block.count("\n") == 2
 
 
+def test_setup_refuses_an_unsupported_computer_before_installing(monkeypatch):
+    monkeypatch.setattr(runtime, "unsupported_reason", lambda: ("macOS 11.7 is too old", "Needs macOS 12"))
+    monkeypatch.setattr(install.Setup, "make_venv", lambda self: (_ for _ in ()).throw(AssertionError))
+    out = []
+    assert not install.Setup(echo=out.append, mic_test=False).run()
+    assert any("macOS 11.7 is too old" in line for line in out)
+
+
+def test_listener_lock_installs_on_macos_12_and_windows_x64():
+    """The pins that hold the macOS floor must survive a re-lock."""
+    pins = {r.name: r.version for r in install.parse_lock(LOCK.read_text())}
+    onnx = tuple(int(x) for x in pins["onnxruntime"].split(".")[:2])
+    av = tuple(int(x) for x in pins["av"].split(".")[:2])
+    assert onnx < (1, 20) and av <= (14, 2)
+
+
 def test_setup_stops_with_a_fix_when_the_source_is_missing(monkeypatch):
     monkeypatch.setattr(runtime, "listener_source", lambda: None)
     out = []

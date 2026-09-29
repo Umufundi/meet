@@ -19,6 +19,12 @@ dependencies = [
     "torch>=2.5,<2.12",
     "torchaudio>=2.5,<2.12",
     "silero-vad>=5.1",
+    # Apple Silicon Macs on macOS 12+. Both are pulled in by faster-whisper and
+    # barely used (its own VAD is off, and it gets arrays, not files to decode),
+    # but newer releases only ship wheels for macOS 13/14+. scipy (speechbrain)
+    # sets the macOS 12 floor. Check every package's floor before lifting these.
+    "onnxruntime>=1.16,<1.20",
+    "av>=11,<14.3",
 ]
 
 [build-system]

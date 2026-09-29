@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import sys
 from pathlib import Path
 
@@ -38,6 +39,53 @@ def venv_python(venv: Path, *, windows: bool | None = None) -> Path:
     if IS_WINDOWS if windows is None else windows:
         return venv / "Scripts" / "python.exe"
     return venv / "bin" / "python"
+
+
+# The oldest macOS every locked listener wheel installs on (scipy and PyAV set
+# it; see listener/pyproject.toml).
+MIN_MACOS = (12, 0)
+
+
+def windows_build() -> int:
+    """Windows build number; 22000 and up is Windows 11. 0 elsewhere."""
+    getter = getattr(sys, "getwindowsversion", None)
+    return int(getter().build) if getter else 0
+
+
+def macos_version() -> tuple[int, ...]:
+    raw = platform.mac_ver()[0]
+    return tuple(int(x) for x in raw.split(".") if x.isdigit()) if raw else ()
+
+
+def unsupported_reason(
+    system: str | None = None, machine: str | None = None, mac: tuple[int, ...] | None = None
+) -> tuple[str, str] | None:
+    """(problem, fix) when the listener stack cannot install here, else None.
+
+    Checked before `meet setup` downloads anything, so an unsupported machine
+    gets one sentence instead of a pip resolver error. PyTorch publishes no
+    Intel-Mac or native Windows-on-ARM wheels for the locked version.
+    """
+    system = system or sys.platform
+    machine = (machine or platform.machine()).lower()
+    if system == "darwin":
+        if machine not in ("arm64", "aarch64"):
+            return (
+                "Intel Macs are not supported (PyTorch no longer ships Intel-Mac builds)",
+                "Use an Apple Silicon Mac. If this IS Apple Silicon, your Python runs under "
+                "Rosetta: install the arm64 Python from python.org and reinstall Meet.",
+            )
+        mac = macos_version() if mac is None else mac
+        if mac and mac < MIN_MACOS:
+            shown = ".".join(map(str, mac))
+            return (f"macOS {shown} is too old", "Meet needs macOS 12 (Monterey) or newer.")
+    if system == "win32" and machine == "arm64":
+        return (
+            "native ARM64 Python on Windows is not supported (PyTorch has no Windows ARM build)",
+            "Install the x64 build of Python 3.12 from python.org (it runs under emulation) "
+            "and reinstall Meet.",
+        )
+    return None
 
 
 def runtime_dir() -> Path:
