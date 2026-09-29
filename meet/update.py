@@ -3,10 +3,10 @@
     meet update            update if there is anything new, then run setup
     meet update --check    only say whether an update is waiting
 
-Meet keeps its own clone of the repository in ~/.meet/src. The repository is
-private, so Git does the fetching: it already knows how to sign in to GitHub
-(Git for Windows remembers the login after one browser sign-in), and nothing
-here ever handles a password or token.
+Meet keeps its own clone of the repository in ~/.meet/src, and Git does the
+fetching: for a private fork it already knows how to sign in to GitHub (Git for
+Windows remembers the login after one browser sign-in), and nothing here ever
+handles a password or token.
 
 This module deliberately imports nothing beyond the standard library and
 `meet.config`/`meet.runtime`. On Windows a file that a running process has

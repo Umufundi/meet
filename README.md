@@ -52,8 +52,8 @@ meet update --check   # just say whether an update is waiting
 ```
 
 Meet keeps its own copy of the code in `~/.meet/src` and uses Git to fetch it
-(`winget install Git.Git` on Windows). The repository is private, so the first
-update may open a browser to sign in to GitHub; Git remembers it after that.
+(`winget install Git.Git` on Windows). If you point it at a private fork, Git
+signs in to GitHub the first time (a browser opens) and remembers it.
 Models are never downloaded again, and your voices and meetings are untouched.
 
 ## Use
@@ -120,3 +120,12 @@ Windows x64, macOS arm64 and Linux x64 against PyPI.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the V1 contract, quality gates, and
 the order work is done in.
+
+## License
+
+Apache License 2.0; see [LICENSE](LICENSE). Copyright (c) 2026 FY Network.
+[NOTICE](NOTICE) records the open-source projects whose designs Meet draws on
+and the licenses of the model weights it downloads (all ungated, Apache-2.0 or
+MIT). Voice data, recordings and transcripts never leave your computer; the
+optional Jev integration sends only transcript text, and only when you have
+configured a key.

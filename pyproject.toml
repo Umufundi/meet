@@ -10,6 +10,8 @@ name = "meet"
 # fast to start, and replaceable engine by engine.
 version = "0.1.0"
 description = "Who is speaking, resolved live, taught by a human."
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "typer>=0.15",

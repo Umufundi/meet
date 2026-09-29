@@ -6,6 +6,7 @@
 # who anyone is. Keeping torch and CTranslate2 behind a process boundary is
 # what lets the core start in milliseconds and stay swappable.
 name = "meet-listen"
+license = "Apache-2.0"
 version = "0.1.0"
 # The lock is verified for exactly these; a newer Python needs a new check.
 requires-python = ">=3.12,<3.14"
