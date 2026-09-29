@@ -48,7 +48,9 @@ def _devices() -> tuple[list[dict], int | None, str | None]:
         return [], None, f"audio backend unavailable: {exc}"
     try:
         found = sd.query_devices()
-        default = sd.default.device[0] if isinstance(sd.default.device, (list, tuple)) else None
+        from .audio import default_input
+
+        default = default_input(sd)
     except Exception as exc:  # PortAudio raises its own error type
         return [], None, f"cannot enumerate audio devices: {exc}"
     devices = [
@@ -61,7 +63,7 @@ def _devices() -> tuple[list[dict], int | None, str | None]:
         for index, info in enumerate(found)
         if info["max_input_channels"] > 0
     ]
-    return devices, (int(default) if default is not None and default >= 0 else None), None
+    return devices, default, None
 
 
 def probe() -> dict:
