@@ -100,12 +100,19 @@ class SidecarError:
 
 
 @dataclass(frozen=True, slots=True)
+class Finishing:
+    """Capture has stopped; `pending` segments are still being transcribed."""
+
+    pending: int
+
+
+@dataclass(frozen=True, slots=True)
 class Stopped:
     wav_path: str
     duration_ms: int
 
 
-Event = Ready | Level | Partial | Utterance | SidecarError | Stopped
+Event = Ready | Level | Partial | Utterance | SidecarError | Finishing | Stopped
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +161,8 @@ def parse_line(line: str) -> Event | Unknown | None:
         )
     if kind == "error":
         return SidecarError(message=str(raw.get("message", "")), fatal=bool(raw.get("fatal", False)))
+    if kind == "finishing":
+        return Finishing(pending=int(raw.get("pending", 0)))
     if kind == "stopped":
         return Stopped(
             wav_path=str(raw.get("wav_path", "")),

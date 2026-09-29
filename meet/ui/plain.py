@@ -45,7 +45,8 @@ def _render_question(question: Question) -> str:
     ]
     for index, (_slug, name, similarity) in enumerate(question.options, start=1):
         lines.append(f"   [{index}] {name:<18} {similarity * 100:.0f}%")
-    lines.append(f"   answer: {question.id} <name>   (a new name enrols that person)")
+    pick = f"type 1-{len(question.options)} to pick, or " if question.options else "type "
+    lines.append(f"   {pick}{question.id} <name>   (a new name enrols that person)")
     lines.append("")
     return "\n".join(lines)
 
@@ -79,7 +80,7 @@ def run(
     """Pump listener events into the meeting until the human or the audio ends.
 
     `idle_timeout` ends a replay once the listener has exited and the queue has
-    drained; live capture passes None and ends on `:end`.
+    drained; live capture passes None and ends on `/end`.
     """
     inbox: Queue[str | object] = Queue()
     stdin_open = True
@@ -146,6 +147,7 @@ def run(
             if time.monotonic() - last_event > idle_timeout:
                 finished = True
 
+    say(f"{DIM}finishing the transcript; after a long meeting this can take a while{RESET}")
     listener.stop()
     # The listener drains its own backlog on shutdown; collect what it emitted.
     for event in listener.drain():

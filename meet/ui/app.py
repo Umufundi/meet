@@ -20,8 +20,10 @@ from pathlib import Path
 
 from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
+from textual.suggester import SuggestFromList
 from textual.widgets import Input, Static
 
 from .. import events
@@ -57,10 +59,22 @@ Screen { background: #14120f; color: #e8e3d9; }
 }
 #question.open { display: block; }
 
+#menu {
+    display: none; margin: 0 1; padding: 0 1; height: auto;
+    border: round #3a352c; background: #1a1712; color: #c9c2b4;
+}
+#menu.open { display: block; }
+
 #foot { dock: bottom; height: 4; }
 #prompt { height: 3; border: round #3a352c; background: #1a1712; }
 #status { height: 1; padding: 0 1; color: #8d8577; background: #14120f; }
 """
+
+
+# Lines kept on screen. A three-hour meeting is a few thousand lines, each a few
+# widgets; past this many the oldest scroll out of the view (never out of the
+# meeting: transcript.md keeps every line) so the screen stays fast.
+MAX_VISIBLE_LINES = 500
 
 
 def _clock(ms: int) -> str:
@@ -124,7 +138,8 @@ class QuestionPanel(Static):
             for index, (_slug, name, similarity) in enumerate(question.options, start=1):
                 body.append(f"  [{index}] {name:<18}", style="#e8e3d9")
                 body.append(f"{similarity * 100:.0f}%\n", style="#8d8577")
-        body.append(f"  answer:  {question.id} <name>", style="#d7a13b")
+        pick = f"type 1-{len(question.options)} to pick, or " if question.options else "type "
+        body.append(f"  {pick}{question.id} <name>", style="#d7a13b")
         if len(pending) > 1:
             body.append(f"   ({len(pending) - 1} more waiting)", style="#8d8577")
         self.update(body)
@@ -133,7 +148,10 @@ class QuestionPanel(Static):
 
 class MeetApp(App):
     CSS = CSS
-    BINDINGS = [("ctrl+c", "wrap_up", "end meeting")]
+    BINDINGS = [
+        ("ctrl+c", "wrap_up", "end meeting"),
+        Binding("tab", "complete", "complete command", show=False, priority=True),
+    ]
 
     elapsed = reactive(0)
 
@@ -159,10 +177,15 @@ class MeetApp(App):
             yield Static("", id="meter", classes="right")
         with Vertical(id="foot"):
             yield Static("starting listener: loading speech and voice models", id="status")
-            yield Input(placeholder="answer a question, or :help", id="prompt")
+            yield Input(
+                placeholder="type / for commands, or a number to answer",
+                id="prompt",
+                suggester=SuggestFromList([f"/{c.name}" for c in commands.COMMANDS], case_sensitive=False),
+            )
         with Vertical():
             yield VerticalScroll(id="transcript")
             yield QuestionPanel(id="question")
+            yield Static(id="menu")
 
     def on_mount(self) -> None:
         self.query_one("#prompt", Input).focus()
@@ -179,7 +202,7 @@ class MeetApp(App):
                 self.sample_rate = event.sample_rate
                 self.wav_path = event.wav_path
                 self.ready = True
-                self.status(f"listening · {event.asr_model} · {event.embed_model} · :help for commands")
+                self.status(f"listening · {event.asr_model} · {event.embed_model} · type / for commands")
             elif isinstance(event, events.Level):
                 self.level = event.peak
             elif isinstance(event, events.Utterance):
@@ -192,10 +215,15 @@ class MeetApp(App):
                 self._lines[line.utterance_id] = widget
                 log.mount(widget)
                 appended = True
+                while len(self._lines) > MAX_VISIBLE_LINES:
+                    oldest = next(iter(self._lines))
+                    self._lines.pop(oldest).remove()
             elif isinstance(event, events.SidecarError):
                 self.status(f"listener: {event.message}")
                 if event.fatal:
                     self.action_wrap_up()
+            elif isinstance(event, events.Finishing):
+                self.status(f"finishing the transcript: {event.pending} passages left")
             elif isinstance(event, events.Stopped):
                 self.wav_path = event.wav_path or self.wav_path
         if appended:
@@ -215,10 +243,39 @@ class MeetApp(App):
 
     # ── human input ────────────────────────────────────────────────────────
 
+    def on_input_changed(self, message: Input.Changed) -> None:
+        """The `/` menu: every command, narrowing as you type, usage kept in
+        view while the arguments are typed."""
+        menu = self.query_one("#menu", Static)
+        matches = commands.suggest(message.value)
+        if not matches:
+            menu.remove_class("open")
+            return
+        body = Text()
+        for index, command in enumerate(matches):
+            if index:
+                body.append("\n")
+            body.append(f"{command.form:<22}", style="bold #e8e3d9" if index == 0 else "#e8e3d9")
+            body.append(command.summary, style="#8d8577")
+        if len(matches) > 1:
+            body.append("\n")
+            body.append("tab completes the first", style="#6f6a5e")
+        menu.update(body)
+        menu.add_class("open")
+
+    def action_complete(self) -> None:
+        """Tab: complete the top command in the menu."""
+        field = self.query_one("#prompt", Input)
+        matches = commands.suggest(field.value)
+        if matches and " " not in field.value:
+            field.value = f"/{matches[0].name} " if matches[0].usage else f"/{matches[0].name}"
+            field.cursor_position = len(field.value)
+
     def on_input_submitted(self, message: Input.Submitted) -> None:
         field = self.query_one("#prompt", Input)
         result = commands.apply(self.meeting, message.value)
         field.value = ""
+        self.query_one("#menu", Static).remove_class("open")
         if result.message:
             self.status(result.message.splitlines()[0] if "\n" not in result.message else result.message)
         if result.changed:
@@ -253,6 +310,12 @@ class MeetApp(App):
         if self.finished:
             return
         self.finished = True
+        # Paint the message before blocking on the listener's backlog, or the
+        # screen looks frozen for exactly as long as the wait lasts.
+        self.status("finishing the transcript; after a long meeting this can take a while")
+        self.set_timer(0.05, self._wrap_up_now)
+
+    def _wrap_up_now(self) -> None:
         self.listener.stop()
         for event in self.listener.drain():
             if isinstance(event, events.Utterance):

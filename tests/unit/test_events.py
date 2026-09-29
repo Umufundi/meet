@@ -44,6 +44,7 @@ def test_other_kinds():
     err = events.parse_line('{"t":"error","message":"x","fatal":true}')
     assert isinstance(err, events.SidecarError) and err.fatal
     assert events.parse_line('{"t":"stopped","wav_path":"a.wav"}').wav_path == "a.wav"
+    assert events.parse_line('{"t":"finishing","pending":12}').pending == 12
 
 
 def test_encode_is_one_line():

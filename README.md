@@ -54,8 +54,17 @@ meet people            # who Meet can recognise
 meet forget Marcus     # erase one person's voiceprints
 ```
 
-During a meeting: `3 Marcus` answers question 3, `:wrong Sarah` fixes the last
-line, `:merge 2 4`, `:undo`, `:decision`, `:action`, `:end`. `:help` lists them.
+During a meeting, type `/` to see every command; the menu narrows as you type
+and Tab completes. When Meet asks *who said this?*, type `1`–`4` to pick a
+suggestion, or `3 Marcus` to answer question 3 with any name. The common ones:
+`/wrong Sarah` fixes the last line, `/merge 2 4`, `/undo`, `/decision`,
+`/action`, `/end`. (`:` works in place of `/`.)
+
+**Meetings have no time limit.** Meet keeps the computer awake while it
+records (close the lid and it will still sleep, so keep it open), and after
+`/end` it finishes transcribing everything, however far behind a long meeting
+left it. The only ceilings are disk space (about 0.12 GB per hour) and the WAV
+format itself, at about 37 hours per recording.
 
 ### Jev (optional)
 
