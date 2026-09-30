@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -119,8 +120,42 @@ def _pip_install(src: Path) -> None:
 
 
 def _setup() -> int:
-    """`meet setup` on the NEW code, in a fresh interpreter."""
-    return subprocess.run([sys.executable, "-m", "meet", "setup"]).returncode
+    """`meet setup` on the NEW code, in a fresh interpreter.
+
+    `-P` keeps the current folder off sys.path. Without it, running from a
+    folder that holds a Meet checkout (an unzipped download, ~/.meet/src)
+    silently runs THAT copy of Meet instead of the one just installed.
+    """
+    return subprocess.run([sys.executable, "-P", "-m", "meet", "setup"]).returncode
+
+
+# The launchers written before `-P`, exactly as the installers wrote them.
+_OLD_CMD = re.compile(rb'^@"([^"\r\n]+)" -m meet %\*\r\n\Z')
+_OLD_SH = re.compile(rb'^#!/bin/sh\nexec "([^"\n]+)" -m meet "\$@"\n\Z')
+
+
+def upgrade_launcher(bin_dir: Path | None = None) -> bool:
+    """Add `-P` to a launcher written by an older installer. True if changed.
+
+    The Windows launcher is a .cmd file, and this code usually runs *from* it:
+    cmd.exe reads a running batch file from disk, resuming at the byte offset
+    where it left off once Python exits. `-m meet` -> `-Pm meet` makes the
+    file exactly one byte longer, so that offset lands on the final newline,
+    which cmd reads as a blank line. Any other content is left alone.
+    """
+    bin_dir = bin_dir or (home() / "bin")
+    for name, pattern in (("meet.cmd", _OLD_CMD), ("meet", _OLD_SH)):
+        path = bin_dir / name
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
+        if not pattern.match(data):
+            continue
+        new = data.replace(b'" -m meet ', b'" -Pm meet ', 1)
+        path.write_bytes(new)
+        return True
+    return False
 
 
 def run(
@@ -173,6 +208,8 @@ def run(
     echo(f"installing Meet {latest[:7]}")
     install(src)
     _record(latest)
+    if upgrade_launcher():
+        echo("updated the `meet` launcher so it always runs the installed Meet")
     echo("checking the runtime (only what changed is rebuilt; models are kept)")
     return setup()
 

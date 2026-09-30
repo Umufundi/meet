@@ -110,3 +110,52 @@ def test_update_never_imports_the_rest_of_meet():
     )
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True).stdout
     assert out.strip().splitlines()[-1] == "[]"
+
+
+# ── the launcher ──────────────────────────────────────────────────────
+
+
+OLD_CMD = b'@"C:\\Users\\3A HealthCare\\.meet\\core\\Scripts\\python.exe" -m meet %*\r\n'
+
+
+def test_old_windows_launcher_gains_dash_p_safely(tmp_path):
+    (tmp_path / "meet.cmd").write_bytes(OLD_CMD)
+    assert update.upgrade_launcher(tmp_path)
+    new = (tmp_path / "meet.cmd").read_bytes()
+    assert new == OLD_CMD.replace(b" -m meet ", b" -Pm meet ")
+    # cmd.exe resumes a running batch file at the old length: that must be
+    # the final newline, i.e. an empty line, never leftover command text.
+    assert len(new) == len(OLD_CMD) + 1
+    assert new[len(OLD_CMD):] == b"\n"
+    assert not update.upgrade_launcher(tmp_path)  # already upgraded: untouched
+
+
+def test_old_posix_launcher_gains_dash_p(tmp_path):
+    old = b'#!/bin/sh\nexec "/home/flo/.meet/core/bin/python" -m meet "$@"\n'
+    (tmp_path / "meet").write_bytes(old)
+    assert update.upgrade_launcher(tmp_path)
+    assert (tmp_path / "meet").read_bytes() == old.replace(b" -m meet ", b" -Pm meet ")
+
+
+@pytest.mark.parametrize("content", [
+    b"@echo off\r\n\"C:\\x\\meet.exe\" %*\r\n",          # the meet.exe era: not ours to touch
+    OLD_CMD + b"\r\n",                                  # anything but the exact old file
+    b"echo something the user wrote\r\n",
+])
+def test_unknown_launchers_are_left_alone(tmp_path, content):
+    (tmp_path / "meet.cmd").write_bytes(content)
+    assert not update.upgrade_launcher(tmp_path)
+    assert (tmp_path / "meet.cmd").read_bytes() == content
+
+
+def test_dash_p_stops_a_checkout_in_the_current_folder_shadowing_meet(tmp_path):
+    """Found on a real Windows PC: `meet update` run from inside an unzipped
+    download ran that download's old code, leaving the runtime stale."""
+    (tmp_path / "meet").mkdir()
+    (tmp_path / "meet" / "__main__.py").write_text("print('SHADOW')\n")
+    run = lambda *flags: subprocess.run(  # noqa: E731
+        [sys.executable, *flags, "-m", "meet", "--help"], cwd=tmp_path, capture_output=True, text=True
+    ).stdout
+    assert "SHADOW" in run()          # the trap, as it was
+    assert "SHADOW" not in run("-P")  # what the launcher and updater now do
+    assert "Usage" in run("-P")

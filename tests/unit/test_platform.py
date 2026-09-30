@@ -67,12 +67,14 @@ def test_manifest_round_trip_and_corruption():
 def test_source_digest_tracks_listener_code(tmp_path):
     src = tmp_path / "listener"
     (src / "meet_listen").mkdir(parents=True)
-    (src / "meet_listen" / "a.py").write_text("x = 1\n")
-    (src / "requirements.lock").write_text("numpy==1\n")
+    # Bytes, not text: on Windows write_text turns "\n" into "\r\n", which
+    # would turn the CRLF case below into "\r\r\n" and test nothing real.
+    (src / "meet_listen" / "a.py").write_bytes(b"x = 1\n")
+    (src / "requirements.lock").write_bytes(b"numpy==1\n")
     first = runtime.source_digest(src)
-    (src / "meet_listen" / "a.py").write_text("x = 1\r\n")
+    (src / "meet_listen" / "a.py").write_bytes(b"x = 1\r\n")
     assert runtime.source_digest(src) == first  # a Windows checkout is the same code
-    (src / "requirements.lock").write_text("numpy==2\n")
+    (src / "requirements.lock").write_bytes(b"numpy==2\n")
     assert runtime.source_digest(src) != first
 
 
