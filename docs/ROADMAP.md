@@ -26,6 +26,7 @@ meet setup  (once)  →  meet doctor (all green)  →  meet start  →  laptop o
 
 **Not in V1:** Teams integration, mobile app, cloud accounts, video, dashboards,
 calendar integrations, meeting bots, multi-device recording, enterprise admin.
+(Parked with a plan under "Later" below: Teams live bot, phone access.)
 
 **Invariants:** fail closed on identity (uncertain → `?`), fail open on
 recording (anything else may fail; audio capture continues). Jev is optional;
@@ -76,7 +77,7 @@ Status: ✅ done · 🟡 partial · ⬜ not started
 | 005 | Upgrade `meet doctor` | ✅ `meet/doctor.py`; `--audio`, `--models`, `--verbose`; every failure carries a fix |
 | 006 | Windows `install.ps1` bootstrap | ✅ `scripts/install.ps1` (+ `install.sh`) |
 | 007 | Cross-platform Jev credentials | ✅ env → Credential Manager / Keychain / Secret Service |
-| 008 | Fresh Windows installation test | ⬜ needs a real Windows 11 machine: install → setup → doctor → start |
+| 008 | Fresh Windows installation test | ✅ real Windows 11 laptop (Python 3.13): install.ps1 → setup → doctor READY → `meet update`. Found and fixed: PS 5.1 `$PSScriptRoot`, Python 3.13 lock gap, default-mic misreport, private-repo update sign-in. A first real meeting (`meet start`) is still to run |
 
 **— FIRST REAL GATE —**
 
@@ -153,3 +154,73 @@ Status: ✅ done · 🟡 partial · ⬜ not started
   target; run it after each re-lock. `tests/unit/test_setup.py` guards the pins.
 - **torchaudio stopped at 2.11.** The listener is capped at torch < 2.12 until
   speechbrain no longer needs torchaudio or an alternative is chosen.
+
+## Later (after V1): parked on purpose
+
+Decided, not scheduled. None of this starts while a V1 gate is open.
+
+### Small follow-ups
+
+- [ ] `meet replay` accepts phone recordings (`.m4a`, `.mp3`, any sample rate)
+      by decoding through PyAV, already in the listener lock. Record on a phone,
+      process on any computer later.
+- [ ] `meet update` / setup: say "checking models" instead of "downloading
+      models" when they are already cached, and skip the 3-second microphone
+      test when nothing about audio changed (keep it for first install and
+      `meet doctor --audio`).
+
+### T — Microsoft Teams live bot (chosen: option C)
+
+Why Teams at all: in an online meeting where everyone has their own device,
+Teams already names every speaker. It cannot split a shared room microphone
+("Conference Room 3" = four people). That is exactly what Meet does, so the
+bot's job is hybrid meetings.
+
+```
+  Teams meeting ──► Meet Bot (joins as participant, shown as "recording")
+                        │  unmixed audio per dominant speaker + who it is
+                        ▼
+                    Meet core ── named streams: labelled by Teams identity
+                        │     └─ shared room streams: voice identification
+                        ▼
+                    live notes + "who said this?" in chat, minutes at the end
+```
+
+Blockers only the owner can clear:
+
+- [ ] Microsoft 365 tenant with global-admin approval for the bot's
+      application permissions (join calls, access call media).
+- [ ] Azure subscription. Application-hosted media bots must run on Windows
+      in Azure (C#/.NET media SDK). Expect $70-150/month for a VM that can
+      transcribe live.
+- [ ] A domain for the bot's TLS certificate.
+- [ ] Recording and consent policy: the bot must announce recording to all
+      participants; check the stricter jurisdictions where meetings happen.
+
+Phases:
+
+- [ ] T1. Meet core accepts named streams alongside shared ones: named
+      streams are pinned to their person, shared streams go through voice ID.
+      Plus a simulator that replays a fake Teams meeting. Buildable and
+      testable locally. (1-2 weeks)
+- [ ] T2. C# bot: join by invite or schedule, receive unmixed audio, forward
+      it to Meet core. Deployed and tested in the owner's tenant. (3-5 weeks)
+- [ ] T3. Chat surface: live notes, identity questions answered in chat
+      ("1 Marcus / 2 James"), minutes posted when the meeting ends. (2-3 weeks)
+- [ ] T4. Packaging: Teams app manifest, admin install guide, optional Teams
+      Store listing (publisher verification). (2+ weeks)
+
+Cheaper steps considered, kept as fallbacks: import a Teams recording and
+`.vtt` transcript afterwards (`meet import`, ~1-2 weeks, no admin), or pull
+them automatically through Microsoft Graph (~3-5 weeks, admin consent).
+
+### Phone
+
+- [ ] Browser companion: `meet serve` on a PC left on at home or the office;
+      the phone opens a secure link (e.g. over Tailscale, since phone browsers
+      only allow the microphone on HTTPS), records, and shows the live
+      transcript and questions. Same models, audio stays on the owner's
+      machines.
+- [ ] Rejected for now: fully in-browser Meet (smaller, less accurate models,
+      a JavaScript rewrite) and a rented cloud server (monthly cost, meeting
+      audio leaves the owner's devices).
