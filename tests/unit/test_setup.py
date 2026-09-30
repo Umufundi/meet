@@ -117,3 +117,31 @@ def test_setup_stops_with_a_fix_when_the_source_is_missing(monkeypatch):
     assert not install.Setup(echo=out.append, mic_test=False).run()
     assert any("listener source" in line for line in out)
     assert any("Reinstall" in line for line in out)
+
+
+def _fake_steps(monkeypatch, installs):
+    monkeypatch.setattr(install.Setup, "make_venv", lambda self: Path("python"))
+    monkeypatch.setattr(install.Setup, "install", lambda self, py, root, lock: installs.append(root))
+    monkeypatch.setattr(install.Setup, "verify",
+                        lambda self: {"ok": True, "packages": {}, "embed_model": "e", "python": "3.13"})
+    monkeypatch.setattr(install.Setup, "microphones", lambda self, info: None)
+    monkeypatch.setattr(install.doctor, "run", lambda **kw: install.doctor.Report())
+
+
+def test_setup_reinstalls_the_listener_whenever_its_code_changes(monkeypatch):
+    """Any change to listener code, not only to the lock, must rebuild it."""
+    installs = []
+    _fake_steps(monkeypatch, installs)
+    runtime.write_manifest({"listener_digest": "0000stale"})
+    assert install.Setup(echo=lambda _: None, mic_test=False, skip_models=True).run()
+    assert len(installs) == 1
+    assert runtime.read_manifest()["listener_digest"] == runtime.source_digest()
+
+    # Same code again: nothing to rebuild.
+    assert install.Setup(echo=lambda _: None, mic_test=False, skip_models=True).run()
+    assert len(installs) == 1
+
+    # A listener source file changes (not the lock): rebuilt.
+    monkeypatch.setattr(runtime, "source_digest", lambda root=None: "1111changed")
+    assert install.Setup(echo=lambda _: None, mic_test=False, skip_models=True).run()
+    assert len(installs) == 2

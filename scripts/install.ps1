@@ -91,8 +91,9 @@ Say "+ Meet app in $Core"
 $Shim = Join-Path $Bin "meet.cmd"
 # One line, never changed afterwards: cmd.exe reads a running .cmd from disk
 # line by line, so a shim rewritten during `meet update` could run garbage.
-# `python -m meet` (not meet.exe) so an update can replace every Meet file.
-Set-Content -Path $Shim -Encoding ASCII -Value "@`"$Core\Scripts\python.exe`" -m meet %*"
+# `python -m meet` (not meet.exe) so an update can replace every Meet file;
+# `-P` so a folder holding a Meet checkout can never shadow the installed one.
+Set-Content -Path $Shim -Encoding ASCII -Value "@`"$Core\Scripts\python.exe`" -Pm meet %*"
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if (-not $UserPath) { $UserPath = "" }
 if (-not (($UserPath -split ";") -contains $Bin)) {
