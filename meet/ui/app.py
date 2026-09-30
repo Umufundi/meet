@@ -139,8 +139,8 @@ class QuestionPanel(Static):
             for index, (_slug, name, similarity) in enumerate(question.options, start=1):
                 body.append(f"  [{index}] {name:<18}", style="#e8e3d9")
                 body.append(f"{similarity * 100:.0f}%\n", style="#8d8577")
-        pick = f"type 1-{len(question.options)} to pick, or " if question.options else "type "
-        body.append(f"  {pick}{question.id} <name>", style="#d7a13b")
+        pick = f"1-{len(question.options)} to pick, or type" if question.options else "type"
+        body.append(f"  {pick} a name (Tab completes) · Enter to skip", style="#d7a13b")
         if len(pending) > 1:
             body.append(f"   ({len(pending) - 1} more waiting)", style="#8d8577")
         self.update(body)
@@ -183,7 +183,7 @@ class MeetApp(App):
         with Vertical(id="foot"):
             yield Static("starting listener: loading speech and voice models", id="status")
             yield Input(
-                placeholder="type / for commands, or a number to answer",
+                placeholder="type a name to answer, Enter to skip, / for commands",
                 id="prompt",
                 suggester=SuggestFromList([f"/{c.name}" for c in commands.COMMANDS], case_sensitive=False),
             )
@@ -315,11 +315,16 @@ class MeetApp(App):
         field.cursor_position = len(field.value)
 
     def action_complete(self) -> None:
-        """Tab: complete the highlighted command in the menu."""
+        """Tab: complete the highlighted command, or a known person's name."""
         field = self.query_one("#prompt", Input)
         command = self._menu_choice(field.value)
         if command is not None:
             self._fill(field, command)
+            return
+        name = commands.complete_name(self.meeting, field.value)
+        if name is not None:
+            field.value = name
+            field.cursor_position = len(name)
 
     def on_input_submitted(self, message: Input.Submitted) -> None:
         field = self.query_one("#prompt", Input)

@@ -45,8 +45,8 @@ def _render_question(question: Question) -> str:
     ]
     for index, (_slug, name, similarity) in enumerate(question.options, start=1):
         lines.append(f"   [{index}] {name:<18} {similarity * 100:.0f}%")
-    pick = f"type 1-{len(question.options)} to pick, or " if question.options else "type "
-    lines.append(f"   {pick}{question.id} <name>   (a new name enrols that person)")
+    pick = f"1-{len(question.options)} to pick, or type" if question.options else "type"
+    lines.append(f"   {pick} a name (a new name enrols that person) · Enter to skip")
     lines.append("")
     return "\n".join(lines)
 

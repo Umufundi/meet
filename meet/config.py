@@ -52,20 +52,44 @@ class Policy:
     """
 
     # ── Voice evidence: cosine on L2-normalized embeddings ───────────────
+    # Calibrated 2026-09-30 on a real 50-minute meeting through one laptop
+    # microphone across a table (6 speakers, 426 utterances, human-labelled).
+    # Scored as `people.match` scores (max of centroid, top-3 sample mean):
+    #   same person      median 0.67, 10th percentile 0.28
+    #   different person median 0.14, 90th percentile 0.23
+    # The first values here (0.65 / 0.72 / 0.82, borrowed from a headset-mic
+    # tool) sat above the typical *same*-person score, so a voice the human
+    # had already named was asked about again and again.
     # Below this, no stored person is proposed at all.
-    # silverstein/minutes ships 0.65 for CAM++; ECAPA behaves comparably.
-    match_min_similarity: float = 0.65
+    match_min_similarity: float = 0.32
     # Label it, but softly, and look again at reconciliation.
-    provisional_similarity: float = 0.72
-    # Label it with no human in the loop. Deliberately short of the ceiling a
-    # real voice reaches, because demanding near-identity means asking forever.
-    auto_similarity: float = 0.82
-    # Confidence alone never decides. Sarah .84 against James .82 is a coin flip
-    # wearing a high number, so a thin lead always goes to the human.
-    min_margin: float = 0.08
+    provisional_similarity: float = 0.40
+    # Label it with no human in the loop. Two-thirds of real same-person
+    # utterances clear it; the 90th percentile of other people is 0.23.
+    auto_similarity: float = 0.50
+    # Confidence alone never decides. A thin lead always goes to Jev, then the
+    # human.
+    min_margin: float = 0.10
     # Joining a live cluster is a looser question than naming a person: the cost
     # of an over-split is one extra question, of an over-merge a wrong name.
-    cluster_join_similarity: float = 0.55
+    # One utterance against a centroid: same-person median 0.58 at >= 4 s.
+    cluster_join_similarity: float = 0.40
+    # A voice already named in this meeting pulls harder than an anonymous
+    # cluster: re-asking about a person the human just named is the failure
+    # users notice first.
+    named_join_similarity: float = 0.34
+    # Below this much speech a voice vector is mostly noise (same-person median
+    # 0.21 under 2 s). Such a line is still transcribed and labelled when the
+    # evidence is clear, but it never starts a cluster and never asks.
+    ask_min_speech_s: float = 2.0
+    # An automatic label may teach the profile only when it is this sure. Kept
+    # well above auto_similarity so a borderline label cannot feed the profile
+    # that produced it.
+    auto_learn_similarity: float = 0.60
+    # How long a skipped voice stays quiet, in meeting time: the rest of the
+    # meeting. Re-asking a voice the human could not place tends to get it
+    # named from one ambiguous line; a stray Enter is reversed with /undo.
+    skip_for_ms: int = 24 * 60 * 60 * 1000
 
     # ── Jev arbitration: genuine probabilities in [0, 1] ─────────────────
     jev_auto_confidence: float = 0.93
@@ -82,9 +106,12 @@ class Policy:
     # ~-48 dBFS. Below this the microphone is effectively muted, and a noise
     # floor normalized up to "signal" is the classic way to poison a profile.
     min_rms: float = 0.004
-    # Lowest similarity between a new sample and the profile it claims to
-    # extend. A sample that disagrees with itself is how profiles rot.
-    min_window_consistency: float = 0.70
+    # Similarity between a new automatic sample and the person's centroid.
+    # Below it the sample may be a different voice misfiled by the clusterer,
+    # which is how profiles rot. Measured against the centroid, not the worst
+    # stored sample: a minimum over samples falls as a profile grows, so the
+    # more a person was confirmed, the less the tool could learn about them.
+    min_window_consistency: float = 0.45
 
     # ── Whisper hygiene ──────────────────────────────────────────────────
     max_no_speech: float = 0.6
@@ -99,7 +126,7 @@ class Policy:
     def first_meeting(self) -> "Policy":
         """Looser gates when nobody is enrolled yet and asking constantly is
         worse than a provisional label the human can correct in one keystroke."""
-        return replace(self, auto_similarity=0.78, provisional_similarity=0.68, min_margin=0.06)
+        return replace(self, auto_similarity=0.46, provisional_similarity=0.36, min_margin=0.08)
 
 
 POLICY = Policy()
