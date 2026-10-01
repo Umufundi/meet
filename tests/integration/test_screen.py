@@ -47,6 +47,39 @@ def test_slash_opens_the_menu_and_tab_completes(conn, tmp_path):
     run(go())
 
 
+def test_arrows_move_the_menu_and_tab_takes_the_highlight(conn, tmp_path):
+    async def go():
+        meeting = Meeting(conn, title="t", use_jev=False, policy=POLICY.first_meeting())
+        app = screen.MeetApp(meeting, QuietListener(), tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.press("/")
+            await pilot.press("down", "down")          # people -> name -> wrong
+            assert "› /wrong" in str(app.query_one("#menu", Static).render())
+            await pilot.press("tab")
+            assert app.query_one("#prompt", Input).value == "/wrong "
+            app.query_one("#prompt", Input).value = ""
+            await pilot.press("/", "up")                # wraps to the last: /end
+            assert "› /end" in str(app.query_one("#menu", Static).render())
+
+    run(go())
+
+
+def test_enter_on_a_partial_command_picks_the_highlight(conn, tmp_path):
+    async def go():
+        meeting = Meeting(conn, title="t", use_jev=False, policy=POLICY.first_meeting())
+        listener = QuietListener()
+        app = screen.MeetApp(meeting, listener, tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.press("/", "m", "e", "enter")   # needs arguments: filled in
+            assert app.query_one("#prompt", Input).value == "/merge "
+            app.query_one("#prompt", Input).value = ""
+            await pilot.press("/", "e", "enter")        # no arguments: runs
+            await pilot.pause(0.3)
+        assert listener.stopped and app.finished
+
+    run(go())
+
+
 def test_end_finishes_the_transcript_before_exiting(conn, tmp_path):
     async def go():
         meeting = Meeting(conn, title="t", use_jev=False)

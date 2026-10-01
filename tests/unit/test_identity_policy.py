@@ -33,18 +33,30 @@ def test_high_score_thin_margin_asks():
 
 
 def test_middle_band_is_provisional():
-    d = decide(result(("marcus", 0.75)))
+    d = decide(result(("marcus", 0.45)))
     assert d.action is Action.PROVISIONAL and d.slug == "marcus"
 
 
 def test_below_provisional_asks():
-    assert decide(result(("marcus", 0.68))).action is Action.ASK
+    assert decide(result(("marcus", 0.36))).action is Action.ASK
 
 
 def test_thresholds_are_on_the_cosine_scale():
-    assert 0.5 < POLICY.match_min_similarity < POLICY.provisional_similarity < POLICY.auto_similarity < 0.9
+    # Calibrated on a laptop microphone across a meeting table, where the same
+    # person typically scores 0.67 and other people stay under 0.23.
+    assert 0.25 < POLICY.match_min_similarity < POLICY.provisional_similarity < POLICY.auto_similarity < 0.9
     loose = POLICY.first_meeting()
     assert loose.auto_similarity < POLICY.auto_similarity
+
+
+def test_a_typical_same_person_score_is_labelled_without_asking():
+    """0.67 is the median same-person score measured in a real room; it must
+    not be a question, or a voice the human already named is asked forever."""
+    assert decide(result(("marcus", 0.67), ("sarah", 0.20))).action is Action.AUTO
+
+
+def test_a_typical_other_person_score_is_never_proposed():
+    assert decide(result(("sarah", 0.23))).action is Action.ASK
 
 
 def test_jev_only_for_genuine_ties():

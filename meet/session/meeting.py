@@ -64,6 +64,23 @@ class Question:
 
 
 @dataclass(slots=True)
+class _Fold:
+    """What an automatic same-person merge changed, so `undo` can split it."""
+
+    source_key: str
+    target_key: str
+    moved: list[int]
+    source_state: tuple
+    target_state: tuple
+
+
+@dataclass(slots=True)
+class _Skip:
+    question: Question
+    previous_until_ms: int
+
+
+@dataclass(slots=True)
 class MeetingStats:
     utterances: int = 0
     questions_asked: int = 0
@@ -97,7 +114,11 @@ class Meeting:
         self.model_id: str = ""
         self.notes: list[str] = []
         self._question_seq = 0
-        self._undo: list[tuple[str, str | None]] = []  # (cluster_key, previous slug)
+        # When the human last submitted a line, for the double-Enter guard.
+        self.last_input_at = 0.0
+        # (cluster_key, previous slug) per naming, a _Fold that rode on one, or
+        # a _Skip.
+        self._undo: list[tuple[str, str | None] | _Fold | _Skip] = []
 
         # An explicit attendee list narrows matching without ever inventing a
         # name: someone not on the list cannot be proposed, so an unexpected
@@ -140,35 +161,54 @@ class Meeting:
 
         self.model_id = event.model_id
         probe = np.asarray(event.embedding, dtype=np.float32)
-        assignment = self.clusterer.assign(probe)
-        cluster = self.clusterer.clusters[assignment.key]
-
-        utterance_id = self._store_utterance(event, assignment.key)
-        cluster.utterance_ids.append(utterance_id)
+        # A voice vector from under ~2 s of speech is mostly noise. Such a line
+        # may join a voice already heard, but it never starts a new one and
+        # never puts a question on screen: nobody should be asked who said "ok".
+        short = event.quality.speech_s < self.policy.ask_min_speech_s
+        assignment = self.clusterer.assign(probe, allow_create=not short)
 
         result = people.match(
             self.conn, probe, event.model_id, policy=self.policy, restrict_to=self.restrict
         )
+        cluster = self.clusterer.clusters.get(assignment.key)
+        pinned = cluster.person_slug if cluster is not None and cluster.pinned else None
         decision = decide(
             result,
-            pinned_slug=cluster.person_slug if cluster.pinned else None,
-            pinned_name=self._display(cluster.person_slug) if cluster.person_slug else None,
+            pinned_slug=pinned,
+            pinned_name=self._display(pinned) if pinned else None,
             policy=self.policy,
         )
 
-        if self.use_jev and should_consult_jev(decision, self.policy):
+        if self.use_jev and should_consult_jev(decision, self.policy) and not short:
             decision = self._consult_jev(event, assignment, decision)
 
-        self._apply(decision, assignment.key, utterance_id, event, result)
+        key = assignment.key
+        if cluster is None:
+            # Unplaced, but the stored voices know who it is: file it with that
+            # person's voice in this meeting, if they have spoken already.
+            home = self._cluster_of(decision.slug) if decision.is_labelled else None
+            if home is not None:
+                key, cluster = home, self.clusterer.clusters[home]
+                cluster.count += 1
+
+        utterance_id = self._store_utterance(event, key)
+        if cluster is not None:
+            cluster.utterance_ids.append(utterance_id)
+            skipped = event.start_ms < cluster.skipped_until_ms
+            if short and not cluster.pinned:
+                # Too little speech to name, rename, or ask about a voice.
+                pass
+            elif not ((short or skipped) and decision.action is Action.ASK):
+                self._apply(decision, key, utterance_id, event, result)
 
         line = Line(
             utterance_id=utterance_id,
             seq=event.seq,
-            cluster_key=assignment.key,
+            cluster_key=key,
             start_ms=event.start_ms,
             end_ms=event.end_ms,
             text=event.text.strip(),
-            provisional=decision.action is Action.PROVISIONAL,
+            provisional=decision.action is Action.PROVISIONAL and cluster is not None,
         )
         self.lines.append(line)
         self.stats.utterances += 1
@@ -276,7 +316,10 @@ class Meeting:
             # face the consistency gate: the human vouched for the *cluster*, and
             # cluster membership was still decided by a machine, so a segment the
             # clusterer misfiled must not quietly become part of someone's voice.
-            if decision.slug:
+            # Only a sure automatic label teaches; a borderline one must not
+            # feed the very profile that produced it.
+            sure = decision.source == "human" or decision.confidence >= self.policy.auto_learn_similarity
+            if decision.slug and sure:
                 outcome = people.learn(
                     self.conn,
                     decision.slug,
@@ -311,6 +354,12 @@ class Meeting:
 
         self._question_seq += 1
         options = [(c.slug, c.name, c.similarity) for c in decision.candidates[:4]]
+        if len(options) < 4:
+            # Offer the people already named in this meeting, closest voice
+            # first, so the likely answer is one keystroke even when the stored
+            # voices were not sure enough to propose anyone.
+            offered = {slug for slug, _, _ in options}
+            options += self._meeting_people(event.embedding, exclude=offered)[: 4 - len(options)]
         question = Question(
             id=self._question_seq,
             cluster_key=cluster_key,
@@ -336,7 +385,50 @@ class Meeting:
         )
         return question
 
+    def _meeting_people(self, embedding, exclude: set[str]) -> list[tuple[str, str, float]]:
+        """People named in this meeting, ranked by how close this voice is to them."""
+        probe = np.asarray(embedding, dtype=np.float32).ravel()
+        probe = probe / (float(np.linalg.norm(probe)) or 1.0)
+        best: dict[str, float] = {}
+        for cluster in self.clusterer.clusters.values():
+            slug = cluster.person_slug
+            if cluster.count == 0 or not cluster.pinned or slug is None or slug in exclude:
+                continue
+            similarity = float(np.dot(probe, cluster.centroid))
+            best[slug] = max(best.get(slug, -1.0), similarity)
+        ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+        return [(slug, self._display(slug), max(similarity, 0.0)) for slug, similarity in ranked]
+
+    def _cluster_of(self, slug: str | None) -> str | None:
+        """The live cluster this meeting has already bound to a person."""
+        if slug is None:
+            return None
+        for key, cluster in self.clusterer.clusters.items():
+            if cluster.count > 0 and cluster.person_slug == slug:
+                return key
+        return None
+
     # ── human authority ────────────────────────────────────────────────────
+
+    def skip(self, question_id: int | None = None) -> bool:
+        """Dismiss a question (the oldest by default) without naming anyone.
+
+        The voice is not asked about again this meeting. Its lines keep `?`
+        and it can still be named later with /name.
+        """
+        if question_id is None:
+            if not self.questions:
+                return False
+            question_id = min(self.questions)
+        question = self.questions.pop(question_id, None)
+        if question is None:
+            return False
+        cluster = self.clusterer.clusters.get(question.cluster_key)
+        if cluster is not None:
+            now_ms = self.lines[-1].end_ms if self.lines else 0
+            self._undo.append(_Skip(question, cluster.skipped_until_ms))
+            cluster.skipped_until_ms = now_ms + self.policy.skip_for_ms
+        return True
 
     def answer(self, question_id: int, name_or_slug: str) -> str:
         """The human names a cluster. Authoritative, retroactive, and taught."""
@@ -384,7 +476,73 @@ class Meeting:
             self.questions.pop(qid, None)
 
         self.stats.samples_learned += self._teach(cluster_key, slug, anchor)
+
+        # The human used a name this meeting already has a voice for: the two
+        # clusters are one person. Fold this one into the other so the voice
+        # has one centroid; two pinned halves of the same person each drift
+        # toward whoever speaks near them. The fold is part of this answer, so
+        # one `undo` reverses both.
+        for other_key, other in self.clusterer.clusters.items():
+            if other_key != cluster_key and other.count > 0 and other.person_slug == slug:
+                self._undo.append(self._fold(cluster_key, other_key))
+                break
         return display
+
+    def _fold(self, source_key: str, target_key: str) -> _Fold:
+        """Merge two clusters of the same named person, keeping enough to undo it."""
+        source = self.clusterer.clusters[source_key]
+        target = self.clusterer.clusters[target_key]
+        record = _Fold(
+            source_key=source_key,
+            target_key=target_key,
+            moved=list(source.utterance_ids),
+            source_state=(source.total.copy(), source.count, source.person_slug, source.pinned),
+            target_state=(target.total.copy(), target.count, target.person_slug, target.pinned,
+                          list(target.utterance_ids)),
+        )
+        self.clusterer.merge(source_key, target_key)
+        self._move_lines(source_key, target_key, None)
+        self.conn.execute(
+            "INSERT INTO cluster(meeting_id, key, merged_into, decided_by, decided_at) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(meeting_id, key) DO UPDATE SET merged_into=excluded.merged_into",
+            (self.id, source_key, target_key, "human", db.now()),
+        )
+        return record
+
+    def _unfold(self, record: _Fold) -> None:
+        source = self.clusterer.clusters[record.source_key]
+        target = self.clusterer.clusters[record.target_key]
+        source_total, source_count, source_slug, source_pinned = record.source_state
+        # Subtract rather than restore a snapshot: lines heard since the fold
+        # belong to the target and must stay counted there.
+        target.total = target.total - source_total
+        target.count -= source_count
+        moved = set(record.moved)
+        target.utterance_ids = [i for i in target.utterance_ids if i not in moved]
+        _, _, target.person_slug, target.pinned, _ = record.target_state
+        source.total, source.count = source_total, source_count
+        source.person_slug, source.pinned = source_slug, source_pinned
+        source.utterance_ids = list(record.moved)
+        self._move_lines(record.target_key, record.source_key, set(record.moved))
+        self.conn.execute(
+            "UPDATE cluster SET merged_into=NULL WHERE meeting_id=? AND key=?",
+            (self.id, record.source_key),
+        )
+
+    def _move_lines(self, from_key: str, to_key: str, only: set[int] | None) -> None:
+        """Re-point stored and rendered lines from one cluster to another."""
+        for line in self.lines:
+            if line.cluster_key == from_key and (only is None or line.utterance_id in only):
+                line.cluster_key = to_key
+        if only is None:
+            self.conn.execute(
+                "UPDATE utterance SET cluster_key=? WHERE meeting_id=? AND cluster_key=?",
+                (to_key, self.id, from_key),
+            )
+        else:
+            self.conn.executemany(
+                "UPDATE utterance SET cluster_key=? WHERE id=?", [(to_key, i) for i in sorted(only)]
+            )
 
     def _teach(self, cluster_key: str, slug: str, anchor: int | None = None) -> int:
         """Turn this cluster's clean utterances into voice samples.
@@ -479,14 +637,35 @@ class Meeting:
         """`:wrong <name>` — retarget the most recent line's cluster."""
         if not self.lines:
             raise IndexError("nothing has been said yet")
+        # Only ever the line on screen: falling back to an earlier line would
+        # silently rename someone the human already named.
+        last = self.lines[-1]
+        if last.cluster_key not in self.clusterer.clusters:
+            raise IndexError("that line was too short to hold a voice; use /name <speaker#> <name>")
+        named = self.name_cluster(last.cluster_key, name_or_slug)
         self.stats.corrections += 1
-        return self.name_cluster(self.lines[-1].cluster_key, name_or_slug)
+        return named
 
     def undo(self) -> str:
         """Reverse the last human naming. The learned samples stay, revoked."""
         if not self._undo:
             raise IndexError("nothing to undo")
-        cluster_key, previous = self._undo.pop()
+        entry = self._undo.pop()
+        if isinstance(entry, _Skip):
+            # A stray Enter: put the question back on screen.
+            cluster = self.clusterer.clusters.get(entry.question.cluster_key)
+            if cluster is None or cluster.count == 0:
+                return "that voice has since been merged; nothing to restore"
+            cluster.skipped_until_ms = entry.previous_until_ms
+            if cluster.pinned:
+                return f"that voice has since been named {self._display(cluster.person_slug)}"
+            self.questions[entry.question.id] = entry.question
+            return "question restored"
+        if isinstance(entry, _Fold):
+            # The fold and the naming under it were one answer.
+            self._unfold(entry)
+            entry = self._undo.pop()
+        cluster_key, previous = entry
         cluster = self.clusterer.clusters.get(cluster_key)
         if cluster is None:
             raise KeyError(cluster_key)

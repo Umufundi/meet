@@ -22,6 +22,10 @@ import numpy as np
 
 from ..config import POLICY, Policy
 
+# Where a line goes when its voice fits no cluster and may not start one. It is
+# never a Cluster, never named, and never asked about; its lines render as `?`.
+UNPLACED = "0"
+
 
 @dataclass
 class Cluster:
@@ -34,6 +38,9 @@ class Cluster:
     # True once a human said who this is. Automatic evidence may no longer move
     # the identity, and only human-trust vectors extend the centroid.
     pinned: bool = False
+    # Meeting time (ms) until which this voice is not asked about, set when the
+    # human skips its question. /undo reverses a skip; /name still works.
+    skipped_until_ms: int = -1
     utterance_ids: list[int] = field(default_factory=list)
 
     @property
@@ -64,8 +71,15 @@ class OnlineClusterer:
         self._next += 1
         return key
 
-    def assign(self, embedding: np.ndarray, *, trust: str = "auto") -> Assignment:
-        """Place one voice vector, creating a cluster when nothing is close enough."""
+    def assign(
+        self, embedding: np.ndarray, *, trust: str = "auto", allow_create: bool = True
+    ) -> Assignment:
+        """Place one voice vector, creating a cluster when nothing is close enough.
+
+        A vector that fits nowhere and may not start a cluster (too short to
+        trust, or the cluster cap is reached) goes to UNPLACED rather than to
+        the nearest stranger: a `?` is recoverable, a wrong name is not.
+        """
         v = np.asarray(embedding, dtype=np.float32).ravel()
         norm = float(np.linalg.norm(v))
         if norm <= 1e-12:
@@ -73,22 +87,37 @@ class OnlineClusterer:
         v = v / norm
 
         live = [c for c in self.clusters.values() if c.count > 0]
-        if not live:
-            return self._create(v, trust)
-
         sims = sorted(
             ((float(np.dot(v, c.centroid)), c) for c in live), key=lambda pair: pair[0], reverse=True
         )
-        best_sim, best = sims[0]
         runner_up = sims[1][0] if len(sims) > 1 else 0.0
 
-        if best_sim < self.policy.cluster_join_similarity and len(self.clusters) < self.max_clusters:
-            return self._create(v, trust)
+        chosen: tuple[float, Cluster] | None = None
+        if sims and sims[0][0] >= self.policy.cluster_join_similarity:
+            chosen = sims[0]
+        else:
+            # A voice the human already named pulls a little harder than an
+            # anonymous cluster, so naming someone once keeps them named.
+            named = [(s, c) for s, c in sims if c.pinned]
+            if named and named[0][0] >= self.policy.named_join_similarity:
+                chosen = named[0]
 
+            # Two named people nearly tied is not evidence for either.
+            if len(named) > 1 and named[0][1].person_slug != named[1][1].person_slug:
+                if named[0][0] - named[1][0] < self.policy.min_margin / 2:
+                    chosen = None
+
+        if chosen is None:
+            if allow_create and len(self.clusters) < self.max_clusters:
+                return self._create(v, trust)
+            return Assignment(UNPLACED, sims[0][0] if sims else 0.0, created=False, runner_up=runner_up)
+
+        best_sim, best = chosen
         # A pinned cluster represents a named human. Automatic evidence may join
         # it (so the transcript stays attributed) but must not drag its centroid,
-        # or one bad segment slowly rewrites what that person sounds like.
-        if not best.pinned or trust == "human":
+        # or one bad segment slowly rewrites what that person sounds like. A
+        # vector too short to start a cluster is too noisy to move one.
+        if (not best.pinned or trust == "human") and allow_create:
             best.total = best.total + v
         best.count += 1
         return Assignment(best.key, best_sim, created=False, runner_up=runner_up)
@@ -121,6 +150,9 @@ class OnlineClusterer:
         target.utterance_ids.extend(source.utterance_ids)
         if target.person_slug is None and source.person_slug is not None:
             target.person_slug = source.person_slug
+            target.pinned = target.pinned or source.pinned
+        elif target.person_slug == source.person_slug:
+            # Same person: a human's pin on either side survives the merge.
             target.pinned = target.pinned or source.pinned
         source.total = np.zeros_like(source.total)
         source.count = 0

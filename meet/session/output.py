@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 
 from ..config import JEV_MODEL, JEV_TIMEOUT_S, JEV_URL
-from ..identity.jev import JevUnavailable, api_key
+from ..identity.jev import JevUnavailable, request_key
 from .meeting import Meeting
 
 EXTRACT_INSTRUCTIONS = """Classify one line from a meeting transcript.
@@ -87,7 +87,7 @@ def _classify(
 
 def extract(meeting: Meeting) -> list[Extract]:
     """Classify the meeting. Returns an empty list when Jev is unreachable."""
-    key = api_key()
+    key = request_key()
     if not key:
         raise JevUnavailable("no TypeSafe API key; skipping semantic extraction")
     lines = meeting.transcript()

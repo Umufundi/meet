@@ -9,7 +9,7 @@ from pathlib import Path
 import typer
 
 from . import doctor as doctor_mod
-from . import install, power, runtime, sidecar
+from . import install, notes, power, runtime, sidecar
 from .config import POLICY, meetings_dir
 from .identity import jev
 from .memory import db
@@ -48,6 +48,10 @@ def _finish(meeting: Meeting, directory: Path, extract: bool) -> None:
         f"({meeting.questions_per_hour():.1f}/hour) · {stats.auto_labelled} auto · "
         f"{stats.corrections} corrected · {stats.samples_learned} voice samples learned"
     )
+    if extract:
+        names = sorted({meeting.label_for(key) for key in meeting.clusterer.named()} - {"?"})
+        if notes.launch(directory, names) is not None:
+            typer.echo(f"writing meeting notes in a separate window: {directory / 'meeting_notes.md'}")
 
 
 @app.command()

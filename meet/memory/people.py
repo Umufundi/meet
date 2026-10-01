@@ -181,11 +181,15 @@ def match(
 def consistency_with_profile(
     conn: sqlite3.Connection, slug: str, model_id: str, probe: np.ndarray
 ) -> float | None:
-    """Lowest similarity between this probe and the person's existing samples.
+    """Similarity between this probe and the centroid of the person's samples.
 
     Returns None for a person with no samples yet. A low value on an `auto`
     sample means the profile is about to be stretched by something that may not
     be the same voice, which is exactly how profiles rot.
+
+    The centroid, not the minimum over samples: the minimum only falls as a
+    profile grows, so a person the human confirmed often became the person the
+    tool could no longer learn about.
     """
     rows = conn.execute(
         "SELECT embedding, dim FROM voice_sample WHERE person_slug=? AND model_id=? AND revoked_at IS NULL",
@@ -196,8 +200,11 @@ def consistency_with_profile(
     probe = np.asarray(probe, dtype=np.float32).ravel()
     probe = probe / (float(np.linalg.norm(probe)) or 1.0)
     vectors = [v for v in (_vector(r) for r in rows) if v is not None and v.size == probe.size]
-    sims = [float(np.dot(probe, v)) for v in vectors]
-    return min(sims) if sims else None
+    if not vectors:
+        return None
+    centroid = np.stack([v / (float(np.linalg.norm(v)) or 1.0) for v in vectors]).mean(axis=0)
+    norm = float(np.linalg.norm(centroid))
+    return float(np.dot(probe, centroid / norm)) if norm > 1e-12 else None
 
 
 @dataclass(frozen=True, slots=True)

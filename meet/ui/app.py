@@ -139,8 +139,8 @@ class QuestionPanel(Static):
             for index, (_slug, name, similarity) in enumerate(question.options, start=1):
                 body.append(f"  [{index}] {name:<18}", style="#e8e3d9")
                 body.append(f"{similarity * 100:.0f}%\n", style="#8d8577")
-        pick = f"type 1-{len(question.options)} to pick, or " if question.options else "type "
-        body.append(f"  {pick}{question.id} <name>", style="#d7a13b")
+        pick = f"1-{len(question.options)} to pick, or type" if question.options else "type"
+        body.append(f"  {pick} a name (Tab completes) · Enter to skip", style="#d7a13b")
         if len(pending) > 1:
             body.append(f"   ({len(pending) - 1} more waiting)", style="#8d8577")
         self.update(body)
@@ -152,6 +152,8 @@ class MeetApp(App):
     BINDINGS = [
         ("ctrl+c", "wrap_up", "end meeting"),
         Binding("tab", "complete", "complete command", show=False, priority=True),
+        Binding("up", "menu_move(-1)", "previous command", show=False, priority=True),
+        Binding("down", "menu_move(1)", "next command", show=False, priority=True),
     ]
 
     elapsed = reactive(0)
@@ -171,6 +173,8 @@ class MeetApp(App):
         # even read. Without a visible state the tool looks deaf at exactly the
         # moment a user is deciding whether it works.
         self.ready = False
+        # Row of the `/` menu that Tab or Enter will take; arrows move it.
+        self.menu_index = 0
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="bar"):
@@ -179,7 +183,7 @@ class MeetApp(App):
         with Vertical(id="foot"):
             yield Static("starting listener: loading speech and voice models", id="status")
             yield Input(
-                placeholder="type / for commands, or a number to answer",
+                placeholder="type a name to answer, Enter to skip, / for commands",
                 id="prompt",
                 suggester=SuggestFromList([f"/{c.name}" for c in commands.COMMANDS], case_sensitive=False),
             )
@@ -265,34 +269,76 @@ class MeetApp(App):
     def on_input_changed(self, message: Input.Changed) -> None:
         """The `/` menu: every command, narrowing as you type, usage kept in
         view while the arguments are typed."""
+        self.menu_index = 0
+        self.paint_menu(message.value)
+
+    def paint_menu(self, value: str) -> None:
         menu = self.query_one("#menu", Static)
-        matches = commands.suggest(message.value)
+        matches = commands.suggest(value)
         if not matches:
             menu.remove_class("open")
             return
+        self.menu_index = max(0, min(self.menu_index, len(matches) - 1))
         body = Text()
         for index, command in enumerate(matches):
             if index:
                 body.append("\n")
-            body.append(f"{command.form:<22}", style="bold #e8e3d9" if index == 0 else "#e8e3d9")
+            chosen = index == self.menu_index
+            body.append("› " if chosen else "  ", style="bold #d7a13b")
+            body.append(f"{command.form:<22}", style="bold #d7a13b" if chosen else "#e8e3d9")
             body.append(command.summary, style="#8d8577")
         if len(matches) > 1:
             body.append("\n")
-            body.append("tab completes the first", style="#6f6a5e")
+            body.append("↑↓ to move · tab or enter to pick", style="#6f6a5e")
         menu.update(body)
         menu.add_class("open")
 
-    def action_complete(self) -> None:
-        """Tab: complete the top command in the menu."""
+    def _menu_choice(self, value: str) -> commands.Command | None:
+        """The highlighted command while its name is still being typed."""
+        if " " in value:
+            return None
+        matches = commands.suggest(value)
+        if not matches:
+            return None
+        return matches[max(0, min(self.menu_index, len(matches) - 1))]
+
+    def action_menu_move(self, step: int) -> None:
         field = self.query_one("#prompt", Input)
         matches = commands.suggest(field.value)
-        if matches and " " not in field.value:
-            field.value = f"/{matches[0].name} " if matches[0].usage else f"/{matches[0].name}"
-            field.cursor_position = len(field.value)
+        if not matches or " " in field.value:
+            return
+        self.menu_index = (self.menu_index + step) % len(matches)
+        self.paint_menu(field.value)
+
+    def _fill(self, field: Input, command: commands.Command) -> None:
+        field.value = f"/{command.name} " if command.usage else f"/{command.name}"
+        field.cursor_position = len(field.value)
+
+    def action_complete(self) -> None:
+        """Tab: complete the highlighted command, or a known person's name."""
+        field = self.query_one("#prompt", Input)
+        command = self._menu_choice(field.value)
+        if command is not None:
+            self._fill(field, command)
+            return
+        name = commands.complete_name(self.meeting, field.value)
+        if name is not None:
+            field.value = name
+            field.cursor_position = len(name)
 
     def on_input_submitted(self, message: Input.Submitted) -> None:
         field = self.query_one("#prompt", Input)
-        result = commands.apply(self.meeting, message.value)
+        raw = message.value
+        # Enter on a half-typed command takes the highlighted one: a command
+        # that needs arguments is filled in to finish typing, one that does
+        # not simply runs.
+        command = self._menu_choice(raw)
+        if command is not None and raw.strip()[1:].lower() != command.name:
+            if command.usage:
+                self._fill(field, command)
+                return
+            raw = f"/{command.name}"
+        result = commands.apply(self.meeting, raw)
         field.value = ""
         self.query_one("#menu", Static).remove_class("open")
         if result.message:
