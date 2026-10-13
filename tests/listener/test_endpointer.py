@@ -2,8 +2,6 @@
 that gates learning. No torch, no microphone."""
 
 import numpy as np
-import pytest
-
 from meet_listen.audio import FRAME, SAMPLE_RATE, Endpointer, NoiseFloor
 
 FRAMES_PER_S = SAMPLE_RATE // FRAME  # 31
@@ -38,14 +36,17 @@ def test_one_turn_is_one_segment_with_honest_quality():
     assert seg.end_ms > seg.start_ms
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "known issue: min_segment_ms is compared with the padded length (pre-roll + speech + "
-    "hangover), so a 32 ms VAD blip becomes a ~0.9 s segment sent to Whisper. Fix with the "
-    "ASR benchmark (roadmap 013-015) so short real answers like 'yes' are not dropped blind."))
 def test_a_blip_is_not_a_segment():
     rng = np.random.default_rng(1)
     segs = run(Endpointer(), [(0.5, 0.001, False), (0.05, 0.1, True), (1.0, 0.001, False)], rng)
     assert segs == []
+
+
+def test_short_reply_survives_blip_filter():
+    rng = np.random.default_rng(11)
+    segs = run(Endpointer(), [(0.5, 0.001, False), (0.16, 0.1, True), (1.0, 0.001, False)], rng)
+    assert len(segs) == 1
+    assert 0.09 <= segs[0].speech_s <= 0.2
 
 
 def test_monologue_is_force_cut_without_losing_audio():
