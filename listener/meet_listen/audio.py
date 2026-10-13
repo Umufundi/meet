@@ -130,6 +130,10 @@ class Endpointer:
         """End of stream: emit whatever is still open."""
         return self._close(False) if self._active else None
 
+    @staticmethod
+    def _speech_duration_too_short(speech_s: float, min_samples: int) -> bool:
+        return round(speech_s * SAMPLE_RATE) < min_samples
+
     def _close(self, forced: bool) -> Segment | None:
         pcm = np.concatenate(self._active) if self._active else np.zeros(0, dtype=np.float32)
         start = self._start_sample
@@ -142,7 +146,12 @@ class Endpointer:
         # pre-roll and no audio is lost across the boundary.
         self._pre_roll = [pcm[-self.pre_roll_frames * FRAME :]] if forced else []
 
-        if pcm.size < self.min_segment_samples or speech_s <= 0.0:
+        # Padding (pre-roll and hangover) is not speech. Reject isolated VAD
+        # blips without dropping short legitimate replies such as "yes".
+        # Two positive 32-ms VAD frames is the smallest useful speech event;
+        # longer turns still use the configured minimum segment duration.
+        min_speech_samples = min(self.min_segment_samples, 2 * FRAME)
+        if pcm.size < self.min_segment_samples or self._speech_duration_too_short(speech_s, min_speech_samples):
             return None
 
         speech_power = float(np.mean(pcm.astype(np.float64) ** 2))
